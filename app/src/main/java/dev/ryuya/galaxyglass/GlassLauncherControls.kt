@@ -20,10 +20,12 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.ShapeDrawable
 import android.os.Handler
 import android.os.Looper
+import android.text.Layout
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.PopupWindow
@@ -33,6 +35,7 @@ import androidx.core.view.OneShotPreDrawListener
 import dev.ryuya.galaxyglass.compat.DexSymbols
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /** Styles launcher-owned controls while leaving their native layout, actions and animation attached. */
@@ -62,14 +65,19 @@ internal class GlassLauncherControls(
     }
 
     private data class PlateAnchor(val viewId: Int, val role: Role, val parent: Boolean = false)
+    private data class TitleAdjustment(val width: Int, val endMargin: Int, val addedWidth: Int)
 
     private val views = WeakHashMap<View, Binding>()
+    private val optionScreens = WeakHashMap<ViewGroup, QuickOptionScreen>()
+    private val optionAccess = mutableMapOf<Class<*>, QuickOptionAccess>()
+    private val optionTitleAccess = mutableMapOf<Class<*>, java.lang.reflect.Method>()
     private val reported = mutableSetOf<Role>()
     private val main = Handler(Looper.getMainLooper())
     private val launcher = context.packageName
     private val resources = context.resources
     private val optionId = id("quickoption_container")
-    private val optionTitleEditId = id("quickoption_title_edit_text")
+    private val optionTitleId = id("quickoption_title_container")
+    private val homeScreenId = id("home_screen")
     private val tabsId = id("workspace_tab_layout")
     private val searchId = id("app_search_wrapper")
     private val searchBackgroundId = id("backgroundContainer")
@@ -124,6 +132,7 @@ internal class GlassLauncherControls(
     private val menuRadiusId = resources.getIdentifier("quick_option_round_corner_radius", "dimen", launcher)
     private val largeFolderRadiusId = resources.getIdentifier("enforced_rounded_corner_max_radius", "dimen", launcher)
     private val nativeCrop = runCatching { NativeCrop() }.getOrNull()
+    private var quickOptionType: Class<out ViewGroup>? = null
     private var findLargeFolder: ((View) -> Unit)? = null
     private var tabIndicator: Class<out View>? = null
     private var reportedError = false
@@ -132,7 +141,6 @@ internal class GlassLauncherControls(
 
     init {
         install("quick_options") { hookQuickOptions(loader) }
-        install("quick_options_arrow") { hookQuickOptionArrow(loader) }
         install("drawer_profile_indicator") { hookTabIndicator(loader) }
         install("launcher_plates") { hookLauncherPlates() }
         install("drawer_search_binding") { hookDrawerSearchBinding(loader) }
@@ -156,67 +164,54 @@ internal class GlassLauncherControls(
     }
 
     private fun hookQuickOptions(loader: ClassLoader) {
+        check(optionId != 0 && optionTitleId != 0)
         val popup = DexSymbols.findClass("com.honeyspace.ui.common.quickoption.QuickOptionPopup", false, loader)
             .asSubclass(ViewGroup::class.java)
-        val container = popup.getDeclaredField("quickOptionContainer").apply { isAccessible = true }
-        val title = popup.getDeclaredField("titleView").apply { isAccessible = true }
-        val anchor = popup.getMethod("getOriginalItemInfo")
-        val isFolder = anchor.returnType.getMethod("isFolderItem")
-        // The launcher can inline its private title setup and outline helpers into these entry points.
-        for (name in listOf("composeChildViews", "populateAndShow")) {
-            val entry = popup.declaredMethods.single { it.name == name && it.returnType == Void.TYPE }
-            ModernHook.deoptimize(entry)
-            ModernHook.aroundMethod(entry) { chain ->
-                val result = chain.proceed()
-                safely {
-                    val receiver = chain.thisObject
-                    val menu = container.get(receiver) as? ViewGroup ?: return@safely
-                    watch(menu, Role.MENU)
-                    val header = title.get(receiver) as? LinearLayout ?: return@safely
-                    if (header.parent !== menu) return@safely
-                    watch(header, Role.MENU_TITLE)
-                    if (level() > 0 && optionTitleEditId != 0 && isFolder.invoke(anchor.invoke(receiver)) == true) {
-                        val label = header.findViewById<TextView>(optionTitleEditId) ?: return@safely
-                        if (label.parent === header) giveFolderTitleMoreRoom(header, label)
-                    }
-                }
-                result
-            }
-        }
-    }
-
-    private fun hookQuickOptionArrow(loader: ClassLoader) {
-        val popup = DexSymbols.findClass("com.honeyspace.ui.common.quickoption.QuickOptionPopup", false, loader)
-        val arrow = popup.getDeclaredField("arrow").apply { isAccessible = true }
-        ModernHook.aroundMethod(popup.getDeclaredMethod("addArrow")) { chain ->
+        quickOptionType = popup
+        val home = DexSymbols.findClass("com.honeyspace.ui.honeypots.homescreen.presentation.HomeView", false, loader)
+        val layout = home.getDeclaredMethod("onLayout", Boolean::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType)
+        ModernHook.aroundMethod(layout) { chain ->
             val result = chain.proceed()
-            safely { (arrow.get(chain.thisObject) as? View)?.let { watch(it, Role.ARROW) } }
+            safely { watchOptionScreen(chain.thisObject as ViewGroup, popup) }
             result
         }
     }
 
-    private fun giveFolderTitleMoreRoom(header: LinearLayout, label: TextView) {
-        val labelParams = label.layoutParams as? LinearLayout.LayoutParams ?: return
-        val headerWidth = header.layoutParams?.width ?: return
-        if (labelParams.width <= 0 || labelParams.weight != 0f || header.weightSum > 0f) return
-        var available = headerWidth - header.paddingStart - header.paddingEnd -
-            labelParams.marginStart - labelParams.marginEnd
-        for (index in 0 until header.childCount) {
+    private class QuickOptionAccess(type: Class<*>) {
+        val container = type.getDeclaredField("quickOptionContainer").apply { isAccessible = true }
+        val title = type.getDeclaredField("titleView").apply { isAccessible = true }
+        val arrow = type.getDeclaredField("arrow").apply { isAccessible = true }
+        val anchor = type.getMethod("getOriginalItemInfo")
+        val isFolder = anchor.returnType.getMethod("isFolderItem")
+    }
+
+    private fun quickOptionAccess(popup: View): QuickOptionAccess =
+        optionAccess.getOrPut(popup.javaClass) { QuickOptionAccess(popup.javaClass) }
+
+    private fun isFolderMenu(header: View): Boolean {
+        val popupName = quickOptionType?.name ?: return false
+        var parent = header.parent as? View
+        while (parent != null && parent.javaClass.name != popupName) parent = parent.parent as? View
+        val popup = parent ?: return false
+        val access = quickOptionAccess(popup)
+        return access.isFolder.invoke(access.anchor.invoke(popup)) == true
+    }
+
+    private fun spaceBeforeTitleButton(header: LinearLayout, label: TextView): Int {
+        var space = 0
+        for (index in header.indexOfChild(label) + 1 until header.childCount) {
             val sibling = header.getChildAt(index)
-            // Invisible edit controls also take space in the native horizontal layout.
-            if (sibling === label || sibling.visibility == View.GONE) continue
-            val params = sibling.layoutParams as? LinearLayout.LayoutParams ?: return
-            if (params.width < 0 || params.weight != 0f) return
-            available -= params.width + params.marginStart + params.marginEnd
+            if (sibling.visibility == View.VISIBLE) break
+            if (sibling.visibility == View.INVISIBLE) {
+                val params = sibling.layoutParams as? LinearLayout.LayoutParams ?: break
+                if (params.width <= 0 || params.weight != 0f) break
+                space += params.width
+            }
         }
         val gap = (8 * header.resources.displayMetrics.density).roundToInt()
-        if (available - gap > labelParams.width) {
-            // Let the title and the rename field use the space left by the current buttons.
-            labelParams.width = 0
-            labelParams.weight = 1f
-            labelParams.marginEnd += gap
-            label.layoutParams = labelParams
-        }
+        return (space - gap).coerceAtLeast(0)
     }
 
     private fun hookRecentsTaskMenu(loader: ClassLoader) {
@@ -448,8 +443,61 @@ internal class GlassLauncherControls(
     fun find(view: View) {
         if (tabIndicator?.isInstance(view) == true) findProfileIndicator(view)
         findLargeFolder?.invoke(view)
+        val popup = quickOptionType
+        if (popup != null && (view.id == homeScreenId || view.id == drawerId) && view is ViewGroup) {
+            watchOptionScreen(view, popup)
+        }
         persistentPlates[view.id]?.let { watch(view, it) }
         findDrawerControl(view)
+    }
+
+    private fun watchOptionScreen(view: ViewGroup, popupType: Class<out ViewGroup>) {
+        if (view in optionScreens) return
+        val screen = QuickOptionScreen(view, popupType.name)
+        optionScreens[view] = screen
+        view.addOnAttachStateChangeListener(screen)
+        if (view.isAttachedToWindow) screen.onViewAttachedToWindow(view)
+    }
+
+    private inner class QuickOptionScreen(host: ViewGroup, private val popupName: String) :
+        View.OnAttachStateChangeListener, ViewTreeObserver.OnPreDrawListener {
+        private val screen = WeakReference(host)
+        private var observer: ViewTreeObserver? = null
+        private var lastPopup = WeakReference<View>(null)
+
+        override fun onViewAttachedToWindow(view: View) {
+            observer = view.viewTreeObserver.also { it.addOnPreDrawListener(this) }
+        }
+
+        override fun onViewDetachedFromWindow(view: View) {
+            observer?.takeIf { it.isAlive }?.removeOnPreDrawListener(this)
+            observer = null
+            lastPopup.clear()
+        }
+
+        override fun onPreDraw(): Boolean {
+            safely { bindPopup() }
+            return true
+        }
+
+        private fun bindPopup() {
+            val host = screen.get() ?: return
+            if (level() <= 0 || !host.isShown) return
+            // In-place menus are direct children of the active screen.
+            for (index in host.childCount - 1 downTo 0) {
+                val child = host.getChildAt(index)
+                if (child.javaClass.name != popupName) continue
+                if (lastPopup.get() === child) return
+                lastPopup = WeakReference(child)
+                // Resolve from the live popup class. Launcher variants load this name separately.
+                val access = quickOptionAccess(child)
+                (access.container.get(child) as? View)?.let { refresh(it, Role.MENU) }
+                (access.title.get(child) as? View)?.let { refresh(it, Role.MENU_TITLE) }
+                (access.arrow.get(child) as? View)?.let { refresh(it, Role.ARROW) }
+                return
+            }
+            lastPopup.clear()
+        }
     }
 
     private fun findDrawerControl(view: View) {
@@ -522,7 +570,8 @@ internal class GlassLauncherControls(
     }
 
     private inner class Binding(view: View, private val role: Role) :
-        View.OnAttachStateChangeListener, View.OnLayoutChangeListener {
+        View.OnAttachStateChangeListener, View.OnLayoutChangeListener,
+        ViewTreeObserver.OnGlobalFocusChangeListener {
         private val view = WeakReference(view)
         private val effect = when (role) {
             Role.MENU, Role.ARROW, Role.MENU_TITLE -> null
@@ -532,14 +581,20 @@ internal class GlassLauncherControls(
         private var attenuated: Drawable? = null
         private var originalAlpha = 255
         private var appliedAlpha: Int? = null
+        private var titleAdjustment: TitleAdjustment? = null
 
         override fun onViewAttachedToWindow(view: View) {
             view.addOnLayoutChangeListener(this)
+            if (role == Role.MENU_TITLE) view.viewTreeObserver.addOnGlobalFocusChangeListener(this)
             OneShotPreDrawListener.add(view, ::refresh)
         }
 
         override fun onViewDetachedFromWindow(view: View) {
             view.removeOnLayoutChangeListener(this)
+            if (role == Role.MENU_TITLE) {
+                view.viewTreeObserver.removeOnGlobalFocusChangeListener(this)
+                updateFolderTitle(view, 0)
+            }
             effect?.restore(view)
             restoreMenu(view)
             restoreTint()
@@ -548,12 +603,21 @@ internal class GlassLauncherControls(
         override fun onLayoutChange(view: View, left: Int, top: Int, right: Int, bottom: Int,
             oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int) = refresh()
 
+        override fun onGlobalFocusChanged(oldFocus: View?, newFocus: View?) {
+            val header = view.get() ?: return
+            if (oldFocus?.parent === header || newFocus?.parent === header) refresh()
+        }
+
         fun refresh() = safely {
             val host = view.get() ?: return@safely
             val strength = visibleStrength(host, role)
             when (role) {
                 Role.MENU -> if (strength <= 0) restoreMenu(host) else attachMenu(host)
-                Role.ARROW, Role.MENU_TITLE -> if (strength <= 0) restoreTint() else styleTint(host, strength)
+                Role.ARROW -> if (strength <= 0) restoreTint() else styleTint(host, strength)
+                Role.MENU_TITLE -> {
+                    if (strength <= 0) restoreTint() else styleTint(host, strength)
+                    updateFolderTitle(host, strength)
+                }
                 Role.SEARCH, Role.FINDER_INPUT, Role.WIDGET_SEARCH, Role.OVERLAY_SEARCH ->
                     effect?.update(host, strength, 30, boundedPlate = true)
                 Role.TASKBAR -> effect?.update(host, strength, 12, boundedPlate = true)
@@ -573,6 +637,34 @@ internal class GlassLauncherControls(
                     effect?.update(host, buttonStrength, 24, boundedPlate = true)
                 }
                 else -> effect?.update(host, strength, 24, boundedPlate = true)
+            }
+        }
+
+        private fun updateFolderTitle(host: View, strength: Int) {
+            val header = host as? LinearLayout ?: return
+            val getLabel = optionTitleAccess.getOrPut(header.javaClass) {
+                header.javaClass.getMethod("getTitleEditText")
+            }
+            val label = getLabel.invoke(header) as? TextView ?: return
+            if (label.parent !== header) return
+            val params = label.layoutParams as? LinearLayout.LayoutParams ?: return
+            val previous = titleAdjustment?.takeIf {
+                params.width == it.width + it.addedWidth && params.marginEnd == it.endMargin - it.addedWidth
+            }
+            val originalWidth = previous?.width ?: params.width
+            val originalMargin = previous?.endMargin ?: params.marginEnd
+            val addedWidth = if (strength > 0 && !label.isFocused && originalWidth > 0 &&
+                params.weight == 0f && isFolderMenu(header)) {
+                val textWidth = ceil(Layout.getDesiredWidth(label.text, label.paint)).toInt() +
+                    label.compoundPaddingStart + label.compoundPaddingEnd
+                (textWidth - originalWidth).coerceIn(0, spaceBeforeTitleButton(header, label))
+            } else 0
+            titleAdjustment = if (addedWidth > 0) TitleAdjustment(originalWidth, originalMargin, addedWidth) else null
+            if (params.width != originalWidth + addedWidth || params.marginEnd != originalMargin - addedWidth) {
+                // Borrow space occupied by hidden controls while keeping the pencil and its hit area in place.
+                params.width = originalWidth + addedWidth
+                params.marginEnd = originalMargin - addedWidth
+                label.layoutParams = params
             }
         }
 
