@@ -25,7 +25,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.core.view.OneShotPreDrawListener
 import dev.ryuya.galaxyglass.compat.DexSymbols
@@ -67,6 +69,7 @@ internal class GlassLauncherControls(
     private val launcher = context.packageName
     private val resources = context.resources
     private val optionId = id("quickoption_container")
+    private val optionTitleEditId = id("quickoption_title_edit_text")
     private val tabsId = id("workspace_tab_layout")
     private val searchId = id("app_search_wrapper")
     private val searchBackgroundId = id("backgroundContainer")
@@ -129,6 +132,7 @@ internal class GlassLauncherControls(
 
     init {
         install("quick_options") { hookQuickOptions(loader) }
+        install("quick_options_folder_title") { hookQuickOptionFolderTitle(loader) }
         install("quick_options_arrow") { hookQuickOptionArrow(loader) }
         install("drawer_profile_indicator") { hookTabIndicator(loader) }
         install("launcher_plates") { hookLauncherPlates() }
@@ -179,6 +183,54 @@ internal class GlassLauncherControls(
             val result = chain.proceed()
             safely { (arrow.get(chain.thisObject) as? View)?.let { watch(it, Role.ARROW) } }
             result
+        }
+    }
+
+    private fun hookQuickOptionFolderTitle(loader: ClassLoader) {
+        if (optionTitleEditId == 0) return
+        val popup = DexSymbols.findClass("com.honeyspace.ui.common.quickoption.QuickOptionPopup", false, loader)
+        val title = popup.getDeclaredField("titleView").apply { isAccessible = true }
+        val anchor = popup.getMethod("getOriginalItemInfo")
+        val isFolder = anchor.returnType.getMethod("isFolderItem")
+        val setup = popup.getDeclaredMethod("setupTitleView", String::class.java,
+            Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+        ModernHook.deoptimize(setup)
+        ModernHook.aroundMethod(setup) { chain ->
+            val result = chain.proceed()
+            safely {
+                if (level() <= 0 || chain.args[2] == true) return@safely
+                val item = anchor.invoke(chain.thisObject) ?: return@safely
+                if (isFolder.invoke(item) != true) return@safely
+                val header = title.get(chain.thisObject) as? LinearLayout ?: return@safely
+                val label = header.findViewById<TextView>(optionTitleEditId) ?: return@safely
+                if (label.parent !== header) return@safely
+                giveFolderTitleMoreRoom(header, label)
+            }
+            result
+        }
+    }
+
+    private fun giveFolderTitleMoreRoom(header: LinearLayout, label: TextView) {
+        val labelParams = label.layoutParams as? LinearLayout.LayoutParams ?: return
+        val headerWidth = header.layoutParams?.width ?: return
+        if (labelParams.width <= 0 || labelParams.weight != 0f || header.weightSum > 0f) return
+        var available = headerWidth - header.paddingStart - header.paddingEnd -
+            labelParams.marginStart - labelParams.marginEnd
+        for (index in 0 until header.childCount) {
+            val sibling = header.getChildAt(index)
+            // Invisible edit controls also take space in the native horizontal layout.
+            if (sibling === label || sibling.visibility == View.GONE) continue
+            val params = sibling.layoutParams as? LinearLayout.LayoutParams ?: return
+            if (params.width < 0 || params.weight != 0f) return
+            available -= params.width + params.marginStart + params.marginEnd
+        }
+        val gap = (8 * header.resources.displayMetrics.density).roundToInt()
+        if (available - gap > labelParams.width) {
+            // Let the title and the rename field use the space left by the current buttons.
+            labelParams.width = 0
+            labelParams.weight = 1f
+            labelParams.marginEnd += gap
+            label.layoutParams = labelParams
         }
     }
 
@@ -573,7 +625,8 @@ internal class GlassLauncherControls(
                 attenuated = stock
                 originalAlpha = stock.alpha
             } else if (stock.alpha != appliedAlpha) originalAlpha = stock.alpha
-            val alpha = stockAlpha(originalAlpha, strength)
+            val suppression = if (role == Role.MENU_TITLE) 0.0084f else 0.0052f
+            val alpha = (originalAlpha * (1f - strength * suppression)).roundToInt()
             if (stock.alpha != alpha) stock.alpha = alpha
             appliedAlpha = alpha
         }
@@ -622,32 +675,37 @@ internal class GlassLauncherControls(
                 val bottom = bounds.bottom.toFloat()
                 val radius = corner.coerceIn(0f, minOf(bounds.width(), bounds.height()) / 2f)
                 val night = dark()
+                val refracted = if (refractionUnavailable) false else {
+                    runCatching {
+                        val glassSource = bitmapShader(view) ?: return@runCatching false
+                        val glass = lens ?: GlassLens(screenDensity).also { lens = it }
+                        glass.draw(canvas, glassSource, left, top, right, bottom, radius, strength, night,
+                            opacity = strength * .009f, tintFactor = material.tintFactor)
+                        if (!reportedRefraction) {
+                            reportedRefraction = true
+                            HookEntry.log("GLASS_HOME_CONTROL_REFRACTED quick_options")
+                            onSurface(Role.MENU.tag, GlassSurfaceStage.REFRACTED)
+                        }
+                        true
+                    }.getOrElse {
+                        refractionUnavailable = true
+                        release()
+                        HookEntry.log("GLASS_HOME_CONTROL_REFRACTION_UNAVAILABLE quick_options ${it.javaClass.simpleName}")
+                        false
+                    }
+                }
                 val original = stock.alpha
                 try {
-                    stock.alpha = stockAlpha(original, strength)
+                    // Keep enough native tint to read the menu over busy wallpaper.
+                    val suppression = if (refracted) 0.007f else 0.0052f
+                    stock.alpha = (original * (1f - strength * suppression)).roundToInt()
                     stock.draw(canvas)
                 } finally {
                     stock.alpha = original
                 }
-                if (!refractionUnavailable) {
-                    runCatching {
-                        val glassSource = bitmapShader(view) ?: return@runCatching
-                        val glass = lens ?: GlassLens(screenDensity).also { lens = it }
-                        glass.draw(canvas, glassSource, left, top, right, bottom, radius, strength, night,
-                            opacity = strength * .0074f, tintFactor = material.tintFactor)
-                        if (!reportedRefraction) {
-                            reportedRefraction = true
-                            HookEntry.log("GLASS_HOME_CONTROL_REFRACTED quick_options")
-                        }
-                    }.onFailure {
-                        refractionUnavailable = true
-                        release()
-                        HookEntry.log("GLASS_HOME_CONTROL_REFRACTION_UNAVAILABLE quick_options ${it.javaClass.simpleName}")
-                    }
-                }
                 radii.fill(radius)
                 material.drawSurface(canvas, left, top, right, bottom, radii, strength, night,
-                    fill = true, rim = true, profile = GlassMaterial.Profile.SYSTEM_SURFACE)
+                    fill = !refracted, rim = true, profile = GlassMaterial.Profile.SYSTEM_SURFACE)
                 didDraw(Role.MENU)
             }
         }
@@ -706,7 +764,4 @@ internal class GlassLauncherControls(
             return (capturedBitmap.invoke(info) as? Bitmap)?.takeUnless(Bitmap::isRecycled)
         }
     }
-
-    private fun stockAlpha(original: Int, strength: Int) =
-        (original * (1f - strength * 0.0052f)).roundToInt()
 }
