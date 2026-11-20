@@ -1,0 +1,33 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="com.android.systemui"/>
+        <package android:name="com.sec.android.app.launcher"/>
+        <package android:name="com.samsung.android.app.smartcapture"/>
+        <package android:name="com.samsung.android.soundassistant"/>
+        <provider android:authorities="dev.ryuya.oneuihometweaks.config;dev.ryuya.galaxycapture.config"/>
+    </queries>
+    <application android:name=".ModuleApplication" android:label="@string/glass_title"
+        android:description="@string/glass_requirements"
+        android:theme="@style/Theme.GalaxyGlass"
+        android:icon="@drawable/ic_glass" android:roundIcon="@drawable/ic_glass"
+        android:allowBackup="false" android:supportsRtl="true" android:localeConfig="@xml/locales_config">
+        <activity android:name=".GlassActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <activity android:name=".LicensesActivity" android:exported="false"/>
+        <provider android:name=".ConfigProvider" android:authorities="${applicationId}.config"
+            android:exported="true"/>
+        <provider android:name=".compat.DexKitProvider" android:authorities="${applicationId}.dexkit"
+            android:exported="true"/>
+        <receiver android:name=".compat.DexKitPackageReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED"/>
+                <action android:name="android.intent.action.PACKAGE_REPLACED"/>
+                <data android:scheme="package"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

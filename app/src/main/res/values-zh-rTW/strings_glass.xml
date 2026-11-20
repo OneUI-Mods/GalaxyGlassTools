@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="glass_title">Galaxy Glass Tools</string>
+    <string name="glass_quick">快速設定圖塊</string>
+    <string name="glass_notifications">通知面板與卡片</string>
+    <string name="glass_volume">音量面板</string>
+    <string name="glass_system_surfaces">系統選單與對話框</string>
+    <string name="glass_lock_screen">鎖定畫面</string>
+    <string name="glass_surface_lock_notifications">鎖定畫面通知卡片</string>
+    <string name="glass_home">主畫面與應用程式列表</string>
+    <string name="glass_strength">玻璃效果強度</string>
+    <string name="glass_tint">玻璃著色</string>
+    <string name="glass_tint_hint">向左更透明，向右顏色更深。</string>
+    <string name="glass_preview">玻璃效果預覽</string>
+    <string name="glass_requirements">實驗功能。更改圖塊設定後，請重新開啟快速設定面板。在 Vector 中為相應介面啟用 SystemUI 或 One UI 主螢幕。</string>
+    <string name="glass_preview_only">此裝置僅支援預覽。實際套用需要執行 One UI 9 BZI9 的 SM-S948Q。</string>
+    <string name="glass_status_line">%1$s · %2$s</string>
+    <string name="glass_state_off">關閉</string>
+    <string name="glass_state_master_off">上層開關已關閉</string>
+    <string name="glass_state_reload">需要重新載入</string>
+    <string name="glass_state_pending">等待首次繪製</string>
+    <string name="glass_state_drawn">已繪製</string>
+    <string name="glass_state_error">無法繪製</string>
+    <string name="glass_surface_diagnostics">玻璃介面診斷</string>
+    <string name="glass_surface_diagnostics_empty">在 SystemUI 或 One UI 主螢幕中開啟選單或面板，即可查看本次開機以來確認的繪製階段。</string>
+    <string name="glass_surface_found">已偵測</string>
+    <string name="glass_surface_drawn">已繪製玻璃表面</string>
+    <string name="glass_surface_native_blur">已要求系統模糊</string>
+    <string name="glass_surface_refracted">已繪製背景折射</string>
+    <string name="glass_surface_editor">快速面板編輯</string>
+    <string name="glass_surface_notification_controls">通知長按選單</string>
+    <string name="glass_surface_conversation">對話通知設定</string>
+    <string name="glass_surface_partial_conversation">對話通知資訊</string>
+    <string name="glass_surface_now_bar">Now Bar 進行中的活動</string>
+    <string name="glass_surface_now_bar_charging">Now Bar 充電</string>
+    <string name="back">返回</string>
+    <string name="glass_capture">Samsung Capture 控制項</string>
+    <string name="glass_enabled">啟用玻璃效果</string>
+    <string name="glass_migration_pending">更新舊版應用程式後即可匯入玻璃效果設定。</string>
+    <string name="license_title">開放原始碼授權條款</string>
+    <string name="own_license">應用程式授權（MIT）</string>
+    <string name="license_unavailable">無法載入授權資訊。</string>
+</resources>

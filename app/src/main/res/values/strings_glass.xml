@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="glass_title">Galaxy Glass Tools</string>
+    <string name="glass_quick">Quick panel tiles</string>
+    <string name="glass_notifications">Notification panel and cards</string>
+    <string name="glass_volume">Volume panel</string>
+    <string name="glass_system_surfaces">System menus and dialogs</string>
+    <string name="glass_lock_screen">Lock screen</string>
+    <string name="glass_surface_lock_notifications">Lock screen notification cards</string>
+    <string name="glass_home">Home and app drawer</string>
+    <string name="glass_strength">Glass intensity</string>
+    <string name="glass_tint">Glass tint</string>
+    <string name="glass_tint_hint">More transparent on the left, more tinted on the right.</string>
+    <string name="glass_preview">Glass appearance preview</string>
+    <string name="glass_requirements">Enable the three target apps in your Xposed manager and reload their processes to apply glass effects.</string>
+    <string name="glass_preview_only">Preview only on this device. The live effect requires SM-S948Q with One UI 9 build BZI9.</string>
+    <string name="glass_status_line">%1$s · %2$s</string>
+    <string name="glass_state_off">Off</string>
+    <string name="glass_state_master_off">Parent switch off</string>
+    <string name="glass_state_reload">Reload required</string>
+    <string name="glass_state_pending">Waiting for first draw</string>
+    <string name="glass_state_drawn">Drawn</string>
+    <string name="glass_state_error">Drawing unavailable</string>
+    <string name="glass_surface_diagnostics">Glass surface diagnostics</string>
+    <string name="glass_surface_diagnostics_empty">Open a menu, dialog or panel in SystemUI or One UI Home to see which surfaces have drawn during this boot.</string>
+    <string name="glass_surface_found">Detected</string>
+    <string name="glass_surface_drawn">Glass drawn</string>
+    <string name="glass_surface_native_blur">System blur requested</string>
+    <string name="glass_surface_refracted">Background refracted</string>
+    <string name="glass_surface_editor">Quick panel editor</string>
+    <string name="glass_surface_notification_controls">Notification controls</string>
+    <string name="glass_surface_conversation">Conversation notification settings</string>
+    <string name="glass_surface_partial_conversation">Conversation notification information</string>
+    <string name="glass_surface_now_bar">Now Bar activity</string>
+    <string name="glass_surface_now_bar_charging">Now Bar charging</string>
+    <string name="license_title">Open-source licenses</string>
+    <string name="own_license">App license (MIT)</string>
+    <string name="license_unavailable">License data could not be loaded.</string>
+</resources>

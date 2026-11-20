@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="glass_title">Galaxy Glass Tools</string>
+    <string name="glass_quick">クイックパネルのタイル</string>
+    <string name="glass_notifications">通知パネルとカード</string>
+    <string name="glass_volume">音量パネル</string>
+    <string name="glass_system_surfaces">システムのメニューとダイアログ</string>
+    <string name="glass_lock_screen">ロック画面</string>
+    <string name="glass_surface_lock_notifications">ロック画面の通知カード</string>
+    <string name="glass_home">ホームとアプリ一覧</string>
+    <string name="glass_strength">ガラスの強さ</string>
+    <string name="glass_tint">ガラスの着色</string>
+    <string name="glass_tint_hint">左ほど透明に、右ほど色が濃くなります。</string>
+    <string name="glass_preview">ガラス効果のプレビュー</string>
+    <string name="glass_requirements">VectorなどでSystemUI・One UIホーム・Samsung Captureを有効にし、各プロセスを再読み込みしてください。</string>
+    <string name="glass_preview_only">この端末ではプレビューのみ利用できます。実際の画面への適用にはSM-S948QのOne UI 9 BZI9が必要です。</string>
+    <string name="glass_status_line">%1$s · %2$s</string>
+    <string name="glass_state_off">オフ</string>
+    <string name="glass_state_master_off">対象の全体設定がオフ</string>
+    <string name="glass_state_reload">対象の再読み込みが必要</string>
+    <string name="glass_state_pending">最初の描画を待機中</string>
+    <string name="glass_state_drawn">描画を確認済み</string>
+    <string name="glass_state_error">描画できません</string>
+    <string name="glass_surface_diagnostics">ガラス面ごとの診断</string>
+    <string name="glass_surface_diagnostics_empty">SystemUIやOne UIホームでメニューやパネルを開くと、端末起動後に確認できた描画段階が表示されます。</string>
+    <string name="glass_surface_found">検出</string>
+    <string name="glass_surface_drawn">ガラス面を描画</string>
+    <string name="glass_surface_native_blur">純正ぼかしを要求</string>
+    <string name="glass_surface_refracted">背景の屈折を描画</string>
+    <string name="glass_surface_editor">クイックパネルの編集</string>
+    <string name="glass_surface_notification_controls">通知の長押しメニュー</string>
+    <string name="glass_surface_conversation">会話の通知設定</string>
+    <string name="glass_surface_partial_conversation">会話の通知情報</string>
+    <string name="glass_surface_now_bar">Now Barの進行中表示</string>
+    <string name="glass_surface_now_bar_charging">Now Barの充電表示</string>
+    <string name="back">戻る</string>
+    <string name="glass_capture">Samsung Captureの操作画面</string>
+    <string name="glass_enabled">ガラス表示を使う</string>
+    <string name="glass_migration_pending">旧アプリを更新すると、ガラス設定を引き継ぎます。</string>
+    <string name="license_title">オープンソースライセンス</string>
+    <string name="own_license">アプリのライセンス（MIT）</string>
+    <string name="license_unavailable">ライセンス情報を読み込めませんでした。</string>
+</resources>

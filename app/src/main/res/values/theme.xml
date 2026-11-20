@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.GalaxyGlass" parent="Theme.Material3.DayNight.NoActionBar"/>
+    <string name="back">Back</string>
+    <string name="qs_percent" translatable="false">%1$d%%</string>
+    <string name="glass_capture">Samsung Capture controls</string>
+    <string name="glass_enabled">Enable glass effects</string>
+    <string name="glass_migration_pending">Update One UI Home Tweaks and Galaxy Capture Tools to import your glass settings.</string>
+</resources>
