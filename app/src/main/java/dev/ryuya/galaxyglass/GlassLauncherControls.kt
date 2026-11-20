@@ -132,7 +132,6 @@ internal class GlassLauncherControls(
 
     init {
         install("quick_options") { hookQuickOptions(loader) }
-        install("quick_options_folder_title") { hookQuickOptionFolderTitle(loader) }
         install("quick_options_arrow") { hookQuickOptionArrow(loader) }
         install("drawer_profile_indicator") { hookTabIndicator(loader) }
         install("launcher_plates") { hookLauncherPlates() }
@@ -161,18 +160,28 @@ internal class GlassLauncherControls(
             .asSubclass(ViewGroup::class.java)
         val container = popup.getDeclaredField("quickOptionContainer").apply { isAccessible = true }
         val title = popup.getDeclaredField("titleView").apply { isAccessible = true }
-        // Both the in-place menu and the panel window finalise their outline here.
-        val finish = popup.getDeclaredMethod("adjustCornerRadius")
-        ModernHook.deoptimize(finish)
-        ModernHook.aroundMethod(finish) { chain ->
-            val result = chain.proceed()
-            safely {
-                val menu = container.get(chain.thisObject) as? ViewGroup ?: return@safely
-                refresh(menu, Role.MENU)
-                val header = title.get(chain.thisObject) as? View
-                if (header?.parent === menu) refresh(header, Role.MENU_TITLE)
+        val anchor = popup.getMethod("getOriginalItemInfo")
+        val isFolder = anchor.returnType.getMethod("isFolderItem")
+        // The launcher can inline its private title setup and outline helpers into these entry points.
+        for (name in listOf("composeChildViews", "populateAndShow")) {
+            val entry = popup.declaredMethods.single { it.name == name && it.returnType == Void.TYPE }
+            ModernHook.deoptimize(entry)
+            ModernHook.aroundMethod(entry) { chain ->
+                val result = chain.proceed()
+                safely {
+                    val receiver = chain.thisObject
+                    val menu = container.get(receiver) as? ViewGroup ?: return@safely
+                    watch(menu, Role.MENU)
+                    val header = title.get(receiver) as? LinearLayout ?: return@safely
+                    if (header.parent !== menu) return@safely
+                    watch(header, Role.MENU_TITLE)
+                    if (level() > 0 && optionTitleEditId != 0 && isFolder.invoke(anchor.invoke(receiver)) == true) {
+                        val label = header.findViewById<TextView>(optionTitleEditId) ?: return@safely
+                        if (label.parent === header) giveFolderTitleMoreRoom(header, label)
+                    }
+                }
+                result
             }
-            result
         }
     }
 
@@ -182,30 +191,6 @@ internal class GlassLauncherControls(
         ModernHook.aroundMethod(popup.getDeclaredMethod("addArrow")) { chain ->
             val result = chain.proceed()
             safely { (arrow.get(chain.thisObject) as? View)?.let { watch(it, Role.ARROW) } }
-            result
-        }
-    }
-
-    private fun hookQuickOptionFolderTitle(loader: ClassLoader) {
-        if (optionTitleEditId == 0) return
-        val popup = DexSymbols.findClass("com.honeyspace.ui.common.quickoption.QuickOptionPopup", false, loader)
-        val title = popup.getDeclaredField("titleView").apply { isAccessible = true }
-        val anchor = popup.getMethod("getOriginalItemInfo")
-        val isFolder = anchor.returnType.getMethod("isFolderItem")
-        val setup = popup.getDeclaredMethod("setupTitleView", String::class.java,
-            Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-        ModernHook.deoptimize(setup)
-        ModernHook.aroundMethod(setup) { chain ->
-            val result = chain.proceed()
-            safely {
-                if (level() <= 0 || chain.args[2] == true) return@safely
-                val item = anchor.invoke(chain.thisObject) ?: return@safely
-                if (isFolder.invoke(item) != true) return@safely
-                val header = title.get(chain.thisObject) as? LinearLayout ?: return@safely
-                val label = header.findViewById<TextView>(optionTitleEditId) ?: return@safely
-                if (label.parent !== header) return@safely
-                giveFolderTitleMoreRoom(header, label)
-            }
             result
         }
     }
@@ -629,6 +614,7 @@ internal class GlassLauncherControls(
             val alpha = (originalAlpha * (1f - strength * suppression)).roundToInt()
             if (stock.alpha != alpha) stock.alpha = alpha
             appliedAlpha = alpha
+            didDraw(role)
         }
 
         private fun restoreTint() {
