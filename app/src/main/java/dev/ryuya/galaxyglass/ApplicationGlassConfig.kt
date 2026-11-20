@@ -1,5 +1,6 @@
 package dev.ryuya.galaxyglass
 
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -34,6 +35,13 @@ internal data class ApplicationGlassConfig(val strength: Int, val tint: Int) {
 
 internal object ApplicationGlassTargets {
     private const val SAMSUNG_KEYBOARD = "com.samsung.android.honeyboard"
+    const val PACKAGE_INSTALLER = "com.google.android.packageinstaller"
+    private const val UNINSTALL_LAUNCH = "com.android.packageinstaller.v2.ui.UninstallLaunch"
+
+    @Suppress("DEPRECATION")
+    fun isUninstallConfirmation(packageName: String, activity: String, action: String?): Boolean =
+        packageName == PACKAGE_INSTALLER && activity == UNINSTALL_LAUNCH &&
+            (action == Intent.ACTION_DELETE || action == Intent.ACTION_UNINSTALL_PACKAGE)
 
     fun includes(app: ApplicationInfo): Boolean = includes(app.packageName, app.flags, app.enabled)
 
@@ -86,7 +94,7 @@ internal object ApplicationGlassTargets {
             "share_contacts_app_bar" to 0, "search_container" to 22, "bottom_menu_container" to 24,
         )
         "com.sec.android.gallery3d" -> mapOf(
-            "bottom_bar_floating_container" to 24, "bottom_bar_layout_container" to 24,
+            "bottom_bar" to 24,
             "toolbar_container" to 0, "location_search_bar_layout" to 22,
         )
         "com.sec.android.app.camera" -> mapOf("capture_ai_bottom_action" to 24)

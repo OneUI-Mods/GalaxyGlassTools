@@ -19,7 +19,7 @@ internal const val GLASS_DOCK_BEVEL_DP = "28.0"
 
 /** Samples a background already supplied by its owner. No display capture is initiated here. */
 @RequiresApi(33)
-internal class GlassLens(density: Float) {
+internal class GlassLens(density: Float, menu: Boolean = false) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val shader = RuntimeShader(
         """
@@ -33,6 +33,7 @@ internal class GlassLens(density: Float) {
         uniform float tintFactor;
         uniform float panel;
         uniform float dock;
+        const float menu = ${if (menu) "1.0" else "0.0"};
 
         $GLASS_CIRCULAR_BEVEL
 
@@ -54,29 +55,32 @@ internal class GlassLens(density: Float) {
             float limit = min(halfSize.x, halfSize.y) * 0.88;
             float innerHeight = min(mix(25.0, $GLASS_DOCK_BEVEL_DP, dock) * pixelsPerDp, limit);
             float outerHeight = min(12.0 * pixelsPerDp, limit);
-            float innerOffset = circularBevel(depth, innerHeight) * mix(15.0, 19.0, dock) * pixelsPerDp * strength;
-            float outerOffset = circularBevel(depth, outerHeight) * 34.0 * pixelsPerDp * strength;
+            float innerOffset = circularBevel(depth, innerHeight) * mix(15.0, 19.0, dock) *
+                mix(1.0, 0.65, menu) * pixelsPerDp * strength;
+            float outerOffset = circularBevel(depth, outerHeight) * mix(34.0, 18.0, menu) * pixelsPerDp * strength;
             float edgeShare = clamp(1.0 - depth / max(outerHeight, 0.5), 0.0, 1.0);
             float2 facePoint = p + normal * innerOffset;
             float2 edgePoint = p + normal * outerOffset;
 
             half3 body = backdrop.eval(facePoint).rgb;
             if (panel < 0.5) {
-                float spread = pixelsPerDp * mix(2.1 + 5.0 * strength, 0.45 + 1.5 * strength, dock);
-                float centerWeight = mix(0.40, 0.62, dock);
+                float spread = pixelsPerDp * mix(mix(2.1 + 5.0 * strength, 0.45 + 1.5 * strength, dock),
+                    9.0 + 6.0 * strength, menu);
+                float centerWeight = mix(mix(0.40, 0.62, dock), 0.18, menu);
                 float neighborWeight = (1.0 - centerWeight) * 0.25;
+                float skew = spread * menu * 0.65;
                 body *= centerWeight;
-                body += backdrop.eval(facePoint + float2(spread, 0)).rgb * neighborWeight;
-                body += backdrop.eval(facePoint - float2(spread, 0)).rgb * neighborWeight;
-                body += backdrop.eval(facePoint + float2(0, spread)).rgb * neighborWeight;
-                body += backdrop.eval(facePoint - float2(0, spread)).rgb * neighborWeight;
+                body += backdrop.eval(facePoint + float2(spread, skew)).rgb * neighborWeight;
+                body += backdrop.eval(facePoint - float2(spread, skew)).rgb * neighborWeight;
+                body += backdrop.eval(facePoint + float2(-skew, spread)).rgb * neighborWeight;
+                body += backdrop.eval(facePoint - float2(-skew, spread)).rgb * neighborWeight;
             }
             half3 light = body;
             if (edgeShare > 0.0) {
                 float2 fringe = normal * (1.6 * pixelsPerDp * edgeShare * strength);
                 half3 edge = half3(bevelBackdrop.eval(edgePoint + fringe).r,
                     bevelBackdrop.eval(edgePoint).g, bevelBackdrop.eval(edgePoint - fringe).b);
-                light = mix(body, edge, edgeShare * strength);
+                light = mix(body, edge, edgeShare * strength * mix(1.0, 0.28, menu));
             }
             if (dock > 0.5) {
                 // The face is drawn by GlassMaterial over the original wallpaper.

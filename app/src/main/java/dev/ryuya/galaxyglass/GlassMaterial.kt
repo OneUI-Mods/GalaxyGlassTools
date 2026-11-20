@@ -46,7 +46,10 @@ internal data class GlassAppearance(
 
 /** Rim and surface lighting shared by the preview and the three host adapters. */
 internal class GlassMaterial(private val density: Float) {
-    enum class Profile { STANDARD, QUICK_CONTROL, QUICK_GROUP, QUICK_SLIDER, NOTIFICATION, VOLUME, SYSTEM_SURFACE, POWER_ACTION }
+    enum class Profile {
+        STANDARD, QUICK_CONTROL, QUICK_GROUP, QUICK_SLIDER, NOTIFICATION, VOLUME, SYSTEM_SURFACE, POWER_ACTION,
+        APP_CHROME,
+    }
 
     var tint: Int = GlassAppearance.DEFAULT_TINT
     val tintFactor: Float
@@ -187,6 +190,16 @@ internal class GlassMaterial(private val density: Float) {
         val bodyColors: IntArray
         val edgeColors: IntArray
         when (profile) {
+            Profile.APP_CHROME -> {
+                // Flush bars fade into the surrounding content instead of lighting up all four edges.
+                val tone = if (dark) 0x667b91 else 0x8ca6bc
+                val horizontal = width >= height
+                val wash = LinearGradient(0f, 0f,
+                    if (horizontal) 0f else width.toFloat(), if (horizontal) height.toFloat() else 0f,
+                    intArrayOf(tone, fillTint(tone, if (dark) 50 else 43), tone),
+                    floatArrayOf(0f, .42f, 1f), Shader.TileMode.CLAMP)
+                return Finish(wash, wash)
+            }
             Profile.STANDARD -> {
                 bodyColors = if (dark) {
                     intArrayOf(color(white, 20), fillTint(0x202633, 54), fillTint(0x141c28, 71))

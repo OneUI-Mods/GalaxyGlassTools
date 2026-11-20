@@ -57,6 +57,7 @@ internal class ApplicationGlassHost(
     private val keyguard = app.getSystemService(KeyguardManager::class.java)
     private val power = app.getSystemService(PowerManager::class.java)
     private val views = WeakHashMap<View, WindowBinding>()
+    private val uninstallDialogs = WeakHashMap<Dialog, WeakReference<Activity>>()
     private val activityWindows = WeakHashMap<Activity, WeakReference<View>>()
     private val rolesByType = mutableMapOf<Class<*>, Int?>()
     private val plateNames = ApplicationGlassTargets.plates(app.packageName) + ApplicationGlassTargets.sheetPlates
@@ -98,6 +99,7 @@ internal class ApplicationGlassHost(
 
     fun start(firstActivity: Activity?) {
         installWindowHooks()
+        if (app.packageName == ApplicationGlassTargets.PACKAGE_INSTALLER) installUninstallPromptHook()
         installLayoutPlates()
         if (inputMethodPlateNames.isNotEmpty()) installInputMethodHooks()
         prepareCompose(firstActivity?.classLoader ?: app.classLoader)
@@ -222,15 +224,20 @@ internal class ApplicationGlassHost(
                     val dialog = chain.thisObject as Dialog
                     val window = dialog.window
                     val decor = window?.peekDecorView()
-                    if (window != null && decor != null && belongsToApp(decor) &&
-                        !sensitive(dialog.javaClass.name) && permitted(window.attributes)) {
+                    if (window != null && decor != null && belongsToApp(decor) && permitted(window.attributes)) {
+                        val uninstallOwner = uninstallDialogs[dialog]?.get()
+                        if (uninstallOwner != null) {
+                            if (isUninstallConfirmation(uninstallOwner)) {
+                                val panel = dialogPanel(decor)
+                                if (panel != null) observe(decor, uninstallOwner, window, panel, uninstallPrompt = true)
+                            }
+                            return@safely
+                        }
+                        if (sensitive(dialog.javaClass.name)) return@safely
                         val owner = activityOf(dialog.context)
                         if (owner == null && inputMethod.get() != null) return@safely
                         val sheet = sheetPanelId != 0 && decor.findViewById<View>(sheetPanelId) != null
-                        val panel = if (window.isFloating && !sheet) {
-                            panelIds.firstNotNullOfOrNull { decor.findViewById<View>(it) }
-                                ?: decor.takeIf(::hasVisibleBackground)
-                        } else null
+                        val panel = if (window.isFloating && !sheet) dialogPanel(decor) else null
                         observe(decor, owner, window, panel)
                     }
                 }
@@ -264,6 +271,28 @@ internal class ApplicationGlassHost(
         }.onFailure { HookEntry.log("GLASS_APP_POPUP_UNAVAILABLE ${app.packageName} $name ${it.javaClass.simpleName}") }
     }
 
+    private fun dialogPanel(decor: View): View? =
+        panelIds.firstNotNullOfOrNull { decor.findViewById<View>(it) } ?: decor.takeIf(::hasVisibleBackground)
+
+    private fun isUninstallConfirmation(owner: Activity): Boolean =
+        ApplicationGlassTargets.isUninstallConfirmation(app.packageName, owner.javaClass.name, owner.intent?.action)
+
+    private fun installUninstallPromptHook() = runCatching {
+        val fragment = Class.forName("com.android.packageinstaller.v2.ui.fragments.UninstallationFragment",
+            false, app.classLoader)
+        val create = fragment.getDeclaredMethod("onCreateDialog")
+        val getActivity = fragment.getMethod("getActivity")
+        check(create.returnType == Dialog::class.java)
+        ModernHook.aroundMethod(create) { chain ->
+            val result = chain.proceed()
+            if (result is Dialog && main.looper.isCurrentThread) safely {
+                val owner = getActivity.invoke(chain.thisObject) as? Activity ?: return@safely
+                if (isUninstallConfirmation(owner)) uninstallDialogs[result] = WeakReference(owner)
+            }
+            result
+        }
+    }.onFailure { HookEntry.log("GLASS_APP_UNINSTALL_UNAVAILABLE ${it.javaClass.simpleName}") }
+
     override fun onActivityPostResumed(activity: Activity) = safely {
         prepareCompose(activity.classLoader)
         resumed = WeakReference(activity)
@@ -288,10 +317,13 @@ internal class ApplicationGlassHost(
     override fun onActivityPaused(activity: Activity) = Unit
     override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
 
-    private fun observe(root: View, owner: Activity?, window: Window?, panel: View?, ime: Boolean = false) {
-        if (owner?.javaClass?.name?.let(::sensitive) == true) return
+    private fun observe(
+        root: View, owner: Activity?, window: Window?, panel: View?, ime: Boolean = false,
+        uninstallPrompt: Boolean = false,
+    ) {
+        if (!uninstallPrompt && owner?.javaClass?.name?.let(::sensitive) == true) return
         if (views.containsKey(root)) return
-        val binding = WindowBinding(root, owner, window, panel, ime)
+        val binding = WindowBinding(root, owner, window, panel, ime, uninstallPrompt)
         views[root] = binding
         root.addOnAttachStateChangeListener(binding)
         if (root.isAttachedToWindow) binding.onViewAttachedToWindow(root)
@@ -324,10 +356,12 @@ internal class ApplicationGlassHost(
         val radius = (surface.radius * density).coerceAtMost(minOf(width, height) * .5f)
         composeCorners.fill(radius)
         material.tint = config.tint
+        val flatBar = surface == ApplicationComposeChrome.Surface.BAR
+        val profile = if (flatBar) GlassMaterial.Profile.APP_CHROME else GlassMaterial.Profile.SYSTEM_SURFACE
         if (material.drawSurface(canvas, 0f, 0f, width, height, composeCorners, level,
-            view.resources.configuration.isNightModeActive, fill = surface.panel, rim = true,
+            view.resources.configuration.isNightModeActive, fill = flatBar || surface.panel, rim = !flatBar,
             opacity = if (surface.panel) .45f else 1f,
-            profile = GlassMaterial.Profile.SYSTEM_SURFACE)) didDraw()
+            profile = profile)) didDraw()
     }
 
     private fun ensureGuard(): Boolean {
@@ -420,8 +454,10 @@ internal class ApplicationGlassHost(
     private fun reduceTransparency() =
         Settings.System.getInt(app.contentResolver, REDUCE_TRANSPARENCY, 0) != 0
 
-    private inner class WindowBinding(root: View, owner: Activity?, window: Window?, panel: View?, private val ime: Boolean) :
-        View.OnAttachStateChangeListener, ViewTreeObserver.OnGlobalLayoutListener {
+    private inner class WindowBinding(
+        root: View, owner: Activity?, window: Window?, panel: View?,
+        private val ime: Boolean, private val uninstallPrompt: Boolean,
+    ) : View.OnAttachStateChangeListener, ViewTreeObserver.OnGlobalLayoutListener {
         private val root = WeakReference(root)
         private val owner = WeakReference(owner)
         private val window = WeakReference(window)
@@ -457,9 +493,12 @@ internal class ApplicationGlassHost(
 
         private fun enabled(root: View): Boolean {
             if (!interactive || reduced || config.strength <= 0 || !root.isAttachedToWindow || !root.isShown ||
-                owner.get()?.isDestroyed == true || owner.get()?.isInPictureInPictureMode == true ||
-                resumed.get()?.javaClass?.name?.let(::sensitive) == true
+                owner.get()?.isDestroyed == true || owner.get()?.isInPictureInPictureMode == true
             ) return false
+            if (uninstallPrompt) {
+                val activity = owner.get() ?: return false
+                if (!isUninstallConfirmation(activity)) return false
+            } else if (resumed.get()?.javaClass?.name?.let(::sensitive) == true) return false
             val params = window.get()?.attributes ?: root.layoutParams as? WindowManager.LayoutParams ?: return false
             return if (ime) permitsInputMethod(params) else permitted(params)
         }
@@ -478,6 +517,11 @@ internal class ApplicationGlassHost(
             plates.entries.toList().forEach { (view, plate) ->
                 if (!view.isAttachedToWindow || view.rootView !== root || !view.isShown) unbind(view, plate)
                 else if (plate.overlay) plate.setBounds(0, 0, view.width, view.height)
+            }
+            if (uninstallPrompt) {
+                val prompt = panel.get() ?: return
+                if (prompt.isShown && prompt.rootView === root && prompt.width > 0 && prompt.height > 0) bind(prompt, 24)
+                return
             }
             pending.addLast(panel.get() ?: root)
             scanBatch(root)
@@ -674,7 +718,7 @@ internal class ApplicationGlassHost(
                     if (band.op(barRegion, Path.Op.INTERSECT) && band.isEmpty) return
                 }
                 if (material.drawSurface(canvas, left, top, right, bottom, square, config.strength, dark,
-                    fill = true, rim = true, opacity = .38f, profile = GlassMaterial.Profile.SYSTEM_SURFACE)) didDraw()
+                    fill = true, rim = false, opacity = .38f, profile = GlassMaterial.Profile.APP_CHROME)) didDraw()
             }
 
             override fun setAlpha(alpha: Int) = Unit
@@ -697,11 +741,19 @@ internal class ApplicationGlassHost(
                 val windowRoot = root.get() ?: return
                 if (!canvas.isHardwareAccelerated || bounds.isEmpty || !enabled(windowRoot)) return
                 safely {
-                    radii.fill(resolveShape(target))
+                    val radius = resolveShape(target)
+                    radii.fill(radius)
+                    val flatBar = corner == 0 && radius == 0f
+                    val profile = when {
+                        flatBar -> GlassMaterial.Profile.APP_CHROME
+                        uninstallPrompt -> GlassMaterial.Profile.STANDARD
+                        else -> GlassMaterial.Profile.SYSTEM_SURFACE
+                    }
                     if (material.drawSurface(canvas, shape.left.toFloat(), shape.top.toFloat(), shape.right.toFloat(),
                         shape.bottom.toFloat(), radii, config.strength, target.resources.configuration.isNightModeActive,
-                        fill = !overlay || canvasToolbar, rim = true, opacity = if (canvasToolbar) .45f else 1f,
-                        profile = GlassMaterial.Profile.SYSTEM_SURFACE)) didDraw()
+                        fill = !overlay || canvasToolbar, rim = !flatBar,
+                        opacity = if (uninstallPrompt) .76f else if (canvasToolbar) .45f else 1f,
+                        profile = profile)) didDraw()
                 }
             }
 

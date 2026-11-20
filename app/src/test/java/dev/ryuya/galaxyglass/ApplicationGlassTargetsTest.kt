@@ -9,6 +9,29 @@ import org.junit.Test
 
 class ApplicationGlassTargetsTest {
     @Test
+    fun limitsUninstallGlassToTheExactConfirmationRoute() {
+        val installer = "com.google.android.packageinstaller"
+        val activity = "com.android.packageinstaller.v2.ui.UninstallLaunch"
+        val delete = "android.intent.action.DELETE"
+        assertTrue(ApplicationGlassTargets.isUninstallConfirmation(installer, activity, delete))
+        assertTrue(ApplicationGlassTargets.isUninstallConfirmation(
+            installer, activity, "android.intent.action.UNINSTALL_PACKAGE",
+        ))
+        assertFalse(ApplicationGlassTargets.isUninstallConfirmation("other.installer", activity, delete))
+        assertFalse(ApplicationGlassTargets.isUninstallConfirmation(installer, "${activity}Other", delete))
+        assertFalse(ApplicationGlassTargets.isUninstallConfirmation(installer, activity, "android.intent.action.INSTALL_PACKAGE"))
+        assertFalse(ApplicationGlassTargets.isUninstallConfirmation(installer, activity, null))
+    }
+
+    @Test
+    fun galleryGlassUsesTheVisibleBottomBarInsteadOfItsLayoutWrappers() {
+        val plates = ApplicationGlassTargets.plates("com.sec.android.gallery3d")
+        assertTrue("bottom_bar" in plates)
+        assertFalse("bottom_bar_layout_container" in plates)
+        assertFalse("bottom_bar_floating_container" in plates)
+    }
+
+    @Test
     fun acceptsSystemAndUpdatedSystemAppsWithCode() {
         assertTrue(ApplicationGlassTargets.includes("com.android.settings", FLAG_SYSTEM or FLAG_HAS_CODE, true))
         assertTrue(ApplicationGlassTargets.includes("com.sec.android.app.myfiles", FLAG_UPDATED_SYSTEM_APP or FLAG_HAS_CODE, true))

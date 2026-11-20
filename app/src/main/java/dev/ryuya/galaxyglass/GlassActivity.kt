@@ -239,7 +239,7 @@ class GlassActivity : AppCompatActivity() {
 
     private fun matchesCurrentHost(key: String, boot: Int): Boolean {
         val version = statePrefs.getInt("$key.version", 0)
-        return hostVersionMatches(version) && statePrefs.getInt("$key.boot", -2) == boot
+        return hostVersionMatches(key, version) && statePrefs.getInt("$key.boot", -2) == boot
     }
 
     private fun bindManagement(supported: Boolean) {
@@ -321,7 +321,7 @@ class GlassActivity : AppCompatActivity() {
                     else -> return@mapNotNull null
                 }
                 if (snapshot["$base.boot"] != boot ||
-                    !hostVersionMatches(snapshot["$base.version"] as? Int ?: 0)) return@mapNotNull null
+                    !hostVersionMatches(base, snapshot["$base.version"] as? Int ?: 0)) return@mapNotNull null
                 val stage = GlassSurfaceStage.entries.firstOrNull { it.name == snapshot[key] } ?: return@mapNotNull null
                 val name = base.removePrefix(prefix)
                 val label = when (name) {
@@ -347,8 +347,10 @@ class GlassActivity : AppCompatActivity() {
     private companion object {
         const val STATE_PAGE = "settings_page"
 
-        // 0.4.4 changes only the manager UI. The hooks and status format match 0.4.3.
-        fun hostVersionMatches(version: Int): Boolean =
-            version == BuildConfig.VERSION_CODE || (BuildConfig.VERSION_CODE == 25 && version == 24)
+        // SystemUI and Capture retain the same hooks and diagnostics since 0.4.3.
+        fun hostVersionMatches(key: String, version: Int): Boolean {
+            val unchanged = key.startsWith("${GlassTargets.SYSTEM_UI}.") || key.startsWith("${GlassTargets.CAPTURE}.")
+            return version == BuildConfig.VERSION_CODE || (unchanged && version in 24..BuildConfig.VERSION_CODE)
+        }
     }
 }

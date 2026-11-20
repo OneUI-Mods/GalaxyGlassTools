@@ -21,6 +21,7 @@ import android.graphics.drawable.ShapeDrawable
 import android.os.Handler
 import android.os.Looper
 import android.text.Layout
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -84,6 +85,8 @@ internal class GlassLauncherControls(
     private val resources = context.resources
     private val optionId = id("quickoption_container")
     private val optionTitleId = id("quickoption_title_container")
+    private val optionActionsId = id("global_option_container")
+    private val optionLabelId = id("global_option_label")
     private val homeScreenId = id("home_screen")
     private val pageActionsId = id("page_action_layout")
     private val widgetPreviewGroupId = id("list_expand")
@@ -693,6 +696,7 @@ internal class GlassLauncherControls(
         private var originalAlpha = 255
         private var appliedAlpha: Int? = null
         private var titleAdjustment: TitleAdjustment? = null
+        private var menuLabels: WeakHashMap<TextView, Int>? = null
 
         override fun onViewAttachedToWindow(view: View) {
             view.addOnLayoutChangeListener(this)
@@ -723,7 +727,10 @@ internal class GlassLauncherControls(
             val host = view.get() ?: return@safely
             val strength = visibleStrength(host, role)
             when (role) {
-                Role.MENU -> if (strength <= 0) restoreMenu(host) else attachMenu(host)
+                Role.MENU -> if (strength <= 0) restoreMenu(host) else {
+                    attachMenu(host)
+                    fitMenuLabels(host)
+                }
                 Role.ARROW -> if (strength <= 0) restoreTint() else styleTint(host, strength)
                 Role.MENU_TITLE -> {
                     if (strength <= 0) restoreTint() else styleTint(host, strength)
@@ -797,10 +804,32 @@ internal class GlassLauncherControls(
         }
 
         private fun restoreMenu(host: View) {
+            menuLabels?.forEach { (label, gravity) ->
+                label.maxLines = 1
+                label.gravity = gravity
+            }
+            menuLabels?.clear()
             val plate = menu ?: return
             if (host.background === plate) host.background = plate.stock
             plate.release()
             menu = null
+        }
+
+        private fun fitMenuLabels(host: View) {
+            if (optionActionsId == 0 || optionLabelId == 0) return
+            val actions = host.findViewById<ViewGroup>(optionActionsId) ?: return
+            for (index in 0 until actions.childCount) {
+                val label = actions.getChildAt(index).findViewById<TextView>(optionLabelId) ?: continue
+                val content = label.parent as? View ?: continue
+                val available = content.width - label.compoundPaddingLeft - label.compoundPaddingRight
+                if (available <= 0 || label.minLines != 1 || label.maxLines != 1 ||
+                    Layout.getDesiredWidth(label.text, label.paint) <= available) continue
+                val changed = menuLabels ?: WeakHashMap<TextView, Int>().also { menuLabels = it }
+                changed[label] = label.gravity
+                label.maxLines = 2
+                label.gravity = (label.gravity and Gravity.HORIZONTAL_GRAVITY_MASK.inv() and
+                    Gravity.RELATIVE_LAYOUT_DIRECTION.inv()) or Gravity.CENTER_HORIZONTAL
+            }
         }
 
         private fun styleTint(host: View, strength: Int) {
@@ -869,7 +898,7 @@ internal class GlassLauncherControls(
                 val refracted = if (refractionUnavailable) false else {
                     runCatching {
                         val glassSource = bitmapShader(view) ?: return@runCatching false
-                        val glass = lens ?: GlassLens(screenDensity).also { lens = it }
+                        val glass = lens ?: GlassLens(screenDensity, menu = true).also { lens = it }
                         glass.draw(canvas, glassSource, left, top, right, bottom, radius, strength, night,
                             opacity = strength * .009f, tintFactor = material.tintFactor)
                         if (!reportedRefraction) {
@@ -888,7 +917,7 @@ internal class GlassLauncherControls(
                 val original = stock.alpha
                 try {
                     // Keep enough native tint to read the menu over busy wallpaper.
-                    val suppression = if (refracted) 0.007f else 0.0052f
+                    val suppression = if (refracted) 0.0042f else 0.004f
                     stock.alpha = (original * (1f - strength * suppression)).roundToInt()
                     stock.draw(canvas)
                 } finally {
@@ -896,7 +925,7 @@ internal class GlassLauncherControls(
                 }
                 radii.fill(radius)
                 material.drawSurface(canvas, left, top, right, bottom, radii, strength, night,
-                    fill = !refracted, rim = true, profile = GlassMaterial.Profile.SYSTEM_SURFACE)
+                    fill = !refracted, rim = true, opacity = .74f, profile = GlassMaterial.Profile.STANDARD)
                 didDraw(Role.MENU)
             }
         }
