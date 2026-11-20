@@ -8,13 +8,12 @@ import android.content.pm.PackageManager
 internal data class ApplicationGlassConfig(val strength: Int, val tint: Int) {
     companion object {
         const val SYSTEM_SWITCH = "glass_system_apps"
-        const val INSTALLED_SWITCH = "glass_installed_apps"
+        private const val LEGACY_INSTALLED_SWITCH = "glass_installed_apps"
         // Retain the group used by running 0.3.0 system app processes.
         const val REMOTE = "system_app_appearance"
 
-        fun read(prefs: SharedPreferences, system: Boolean): ApplicationGlassConfig {
-            val key = if (system) SYSTEM_SWITCH else INSTALLED_SWITCH
-            val strength = if (prefs.getBoolean(key, false)) {
+        fun read(prefs: SharedPreferences): ApplicationGlassConfig {
+            val strength = if (prefs.getBoolean(SYSTEM_SWITCH, false)) {
                 prefs.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH).coerceIn(0, 100)
             } else 0
             return ApplicationGlassConfig(strength, GlassAppearance.tintPercent(
@@ -25,7 +24,8 @@ internal data class ApplicationGlassConfig(val strength: Int, val tint: Int) {
         fun publish(local: SharedPreferences, remote: SharedPreferences): Boolean =
             remote.edit()
                 .putBoolean(SYSTEM_SWITCH, local.getBoolean("enabled", true) && local.getBoolean(SYSTEM_SWITCH, true))
-                .putBoolean(INSTALLED_SWITCH, local.getBoolean("enabled", true) && local.getBoolean(INSTALLED_SWITCH, true))
+                // Disable the old renderer even in third-party processes that still have 0.4.0 loaded.
+                .putBoolean(LEGACY_INSTALLED_SWITCH, false)
                 .putInt(GlassAppearance.STRENGTH, local.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH))
                 .putInt(GlassAppearance.TINT, local.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT))
                 .commit()
@@ -36,17 +36,16 @@ internal object ApplicationGlassTargets {
     fun includes(app: ApplicationInfo): Boolean = includes(app.packageName, app.flags, app.enabled)
 
     fun includes(packageName: String, flags: Int, enabled: Boolean): Boolean =
-        enabled && flags and ApplicationInfo.FLAG_HAS_CODE != 0 &&
+        enabled && flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0 &&
+            flags and ApplicationInfo.FLAG_HAS_CODE != 0 &&
             packageName != "android" && packageName != BuildConfig.APPLICATION_ID && packageName !in GlassTargets.HOSTS
-
-    fun isSystem(app: ApplicationInfo): Boolean =
-        app.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
 
     fun hasUiActivity(name: String): Boolean = name != "android.app.AppDetailsActivity"
 
     fun packages(pm: PackageManager): List<String> {
         val flags = PackageManager.PackageInfoFlags.of(
-            (PackageManager.GET_ACTIVITIES or PackageManager.MATCH_DISABLED_COMPONENTS).toLong(),
+            (PackageManager.MATCH_SYSTEM_ONLY or PackageManager.GET_ACTIVITIES or
+                PackageManager.MATCH_DISABLED_COMPONENTS).toLong(),
         )
         return pm.getInstalledPackages(flags)
             .filter { info -> info.applicationInfo?.let(::includes) == true && info.activities.orEmpty().any { hasUiActivity(it.name) } }

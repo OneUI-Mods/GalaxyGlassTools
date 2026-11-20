@@ -52,16 +52,12 @@ class GlassActivity : AppCompatActivity() {
         }
         val prefs = getSharedPreferences(ConfigProvider.PREFS, Context.MODE_PRIVATE)
         val master = requireViewById<MaterialSwitch>(R.id.glass_enabled)
-        for ((id, key) in listOf(
-            R.id.glass_system_apps to ApplicationGlassConfig.SYSTEM_SWITCH,
-            R.id.glass_installed_apps to ApplicationGlassConfig.INSTALLED_SWITCH,
-        )) {
-            requireViewById<MaterialSwitch>(id).apply {
-                isChecked = prefs.getBoolean(key, true)
-                setOnCheckedChangeListener { _, enabled ->
-                    prefs.edit().putBoolean(key, enabled).apply()
-                    FrameworkServiceConnection.publishApplicationGlassConfig(this@GlassActivity)
-                }
+        requireViewById<MaterialSwitch>(R.id.glass_system_apps).apply {
+            val key = ApplicationGlassConfig.SYSTEM_SWITCH
+            isChecked = prefs.getBoolean(key, true)
+            setOnCheckedChangeListener { _, enabled ->
+                prefs.edit().putBoolean(key, enabled).apply()
+                FrameworkServiceConnection.publishApplicationGlassConfig(this@GlassActivity)
             }
         }
         scopeStatus = requireViewById(R.id.glass_system_app_scope_status)

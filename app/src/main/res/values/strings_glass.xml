@@ -37,9 +37,8 @@
     <string name="own_license">App license (MIT)</string>
     <string name="license_unavailable">License data could not be loaded.</string>
     <string name="glass_system_apps">System apps</string>
-    <string name="glass_installed_apps">Downloaded apps</string>
-    <string name="glass_system_app_scope_request">Add all apps to scope</string>
-    <string name="glass_system_app_scope_count">In scope: %1$d of %2$d apps with screens</string>
+    <string name="glass_system_app_scope_request">Add all system apps to scope</string>
+    <string name="glass_system_app_scope_count">In scope: %1$d of %2$d system apps with screens</string>
     <string name="glass_system_app_scope_pending">Approve the scope request in your Xposed manager.</string>
     <string name="glass_system_app_scope_approved">Scope approved (%1$d of %2$d). Reopen the apps to load glass.</string>
     <string name="glass_system_app_scope_disconnected">Waiting for the Xposed manager. Enable this module in the manager and reopen it.</string>

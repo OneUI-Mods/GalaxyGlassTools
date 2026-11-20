@@ -59,8 +59,7 @@ internal class ApplicationGlassHost(
         app.resources.getIdentifier("parentPanel", "id", it)
     }.filter { it != 0 }.distinct()
     private val material by lazy { GlassMaterial(app.resources.displayMetrics.density) }
-    private val isSystem = ApplicationGlassTargets.isSystem(app.applicationInfo)
-    private var config = ApplicationGlassConfig.read(prefs, isSystem)
+    private var config = ApplicationGlassConfig.read(prefs)
     private var reduced = reduceTransparency()
     private var interactive = false
     private var resumed = WeakReference<Activity>(null)
@@ -76,7 +75,7 @@ internal class ApplicationGlassHost(
     }
     private val readSettings = Runnable {
         safely {
-            config = ApplicationGlassConfig.read(prefs, isSystem)
+            config = ApplicationGlassConfig.read(prefs)
             if (config.strength > 0) material.tint = config.tint
             updateWindows()
             views.values.toList().forEach { it.invalidate() }

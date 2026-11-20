@@ -9,14 +9,14 @@ import org.junit.Test
 
 class ApplicationGlassTargetsTest {
     @Test
-    fun acceptsDownloadedSystemAndUpdatedSystemAppsWithCode() {
-        assertTrue(ApplicationGlassTargets.includes("example.browser", FLAG_HAS_CODE, true))
+    fun acceptsSystemAndUpdatedSystemAppsWithCode() {
         assertTrue(ApplicationGlassTargets.includes("com.android.settings", FLAG_SYSTEM or FLAG_HAS_CODE, true))
         assertTrue(ApplicationGlassTargets.includes("com.sec.android.app.myfiles", FLAG_UPDATED_SYSTEM_APP or FLAG_HAS_CODE, true))
     }
 
     @Test
-    fun keepsDisabledResourceOnlyAndDedicatedHostsOutOfTheCommonAdapter() {
+    fun keepsThirdPartyDisabledResourceOnlyAndDedicatedHostsOutOfTheCommonAdapter() {
+        assertFalse(ApplicationGlassTargets.includes("example.browser", FLAG_HAS_CODE, true))
         assertFalse(ApplicationGlassTargets.includes("com.android.settings", FLAG_SYSTEM or FLAG_HAS_CODE, false))
         assertFalse(ApplicationGlassTargets.includes("com.android.overlay", FLAG_SYSTEM, true))
         for (name in GlassTargets.HOSTS + setOf("android", BuildConfig.APPLICATION_ID)) {

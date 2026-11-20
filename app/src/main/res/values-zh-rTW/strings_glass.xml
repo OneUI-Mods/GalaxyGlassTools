@@ -41,9 +41,8 @@
     <string name="own_license">應用程式授權（MIT）</string>
     <string name="license_unavailable">無法載入授權資訊。</string>
     <string name="glass_system_apps">系統應用程式</string>
-    <string name="glass_installed_apps">已下載的應用程式</string>
-    <string name="glass_system_app_scope_request">將所有應用程式加入作用範圍</string>
-    <string name="glass_system_app_scope_count">有畫面的應用程式：%1$d / %2$d 已加入</string>
+    <string name="glass_system_app_scope_request">將所有系統應用程式加入作用範圍</string>
+    <string name="glass_system_app_scope_count">有畫面的系統應用程式：%1$d / %2$d 已加入</string>
     <string name="glass_system_app_scope_pending">請在 Xposed 管理程式中核准作用範圍要求。</string>
     <string name="glass_system_app_scope_approved">已更新作用範圍（%1$d / %2$d）。重新開啟應用程式即可載入。</string>
     <string name="glass_system_app_scope_disconnected">正在等待 Xposed 管理程式。請在管理程式中啟用模組，再重新開啟此應用程式。</string>
