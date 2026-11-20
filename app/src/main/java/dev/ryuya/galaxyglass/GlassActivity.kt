@@ -52,15 +52,21 @@ class GlassActivity : AppCompatActivity() {
         }
         val prefs = getSharedPreferences(ConfigProvider.PREFS, Context.MODE_PRIVATE)
         val master = requireViewById<MaterialSwitch>(R.id.glass_enabled)
-        val systemApps = requireViewById<MaterialSwitch>(R.id.glass_system_apps)
-        systemApps.isChecked = prefs.getBoolean(SystemAppGlassConfig.SWITCH, true)
+        for ((id, key) in listOf(
+            R.id.glass_system_apps to ApplicationGlassConfig.SYSTEM_SWITCH,
+            R.id.glass_installed_apps to ApplicationGlassConfig.INSTALLED_SWITCH,
+        )) {
+            requireViewById<MaterialSwitch>(id).apply {
+                isChecked = prefs.getBoolean(key, true)
+                setOnCheckedChangeListener { _, enabled ->
+                    prefs.edit().putBoolean(key, enabled).apply()
+                    FrameworkServiceConnection.publishApplicationGlassConfig(this@GlassActivity)
+                }
+            }
+        }
         scopeStatus = requireViewById(R.id.glass_system_app_scope_status)
         requireViewById<View>(R.id.glass_system_app_scope).setOnClickListener {
             updateSystemAppScope(request = true)
-        }
-        systemApps.setOnCheckedChangeListener { _, enabled ->
-            prefs.edit().putBoolean(SystemAppGlassConfig.SWITCH, enabled).apply()
-            FrameworkServiceConnection.publishSystemAppConfig(this)
         }
         val capture = requireViewById<MaterialSwitch>(R.id.glass_capture)
         master.isChecked = prefs.getBoolean("enabled", true)
@@ -152,7 +158,7 @@ class GlassActivity : AppCompatActivity() {
         }
         fun changed() {
             if (supported) contentResolver.notifyChange(ConfigProvider.URI, null)
-            FrameworkServiceConnection.publishSystemAppConfig(this)
+            FrameworkServiceConnection.publishApplicationGlassConfig(this)
         }
         for ((control, key) in listOf(quick to GlassAppearance.QUICK,
                    notifications to GlassAppearance.NOTIFICATIONS, volume to GlassAppearance.VOLUME,
@@ -183,7 +189,7 @@ class GlassActivity : AppCompatActivity() {
     private fun updateSystemAppScope(request: Boolean) {
         val status = scopeStatus ?: return
         val generation = ++scopeGeneration
-        FrameworkServiceConnection.systemAppScope(this, request) { result ->
+        FrameworkServiceConnection.applicationScope(this, request) { result ->
             runOnUiThread {
                 if (isDestroyed || result.state == FrameworkServiceConnection.ScopeState.COUNT &&
                     generation != scopeGeneration) return@runOnUiThread

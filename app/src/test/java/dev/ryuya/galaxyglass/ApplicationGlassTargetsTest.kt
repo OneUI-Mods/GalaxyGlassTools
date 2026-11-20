@@ -1,0 +1,27 @@
+package dev.ryuya.galaxyglass
+
+import android.content.pm.ApplicationInfo.FLAG_HAS_CODE
+import android.content.pm.ApplicationInfo.FLAG_SYSTEM
+import android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ApplicationGlassTargetsTest {
+    @Test
+    fun acceptsDownloadedSystemAndUpdatedSystemAppsWithCode() {
+        assertTrue(ApplicationGlassTargets.includes("example.browser", FLAG_HAS_CODE, true))
+        assertTrue(ApplicationGlassTargets.includes("com.android.settings", FLAG_SYSTEM or FLAG_HAS_CODE, true))
+        assertTrue(ApplicationGlassTargets.includes("com.sec.android.app.myfiles", FLAG_UPDATED_SYSTEM_APP or FLAG_HAS_CODE, true))
+    }
+
+    @Test
+    fun keepsDisabledResourceOnlyAndDedicatedHostsOutOfTheCommonAdapter() {
+        assertFalse(ApplicationGlassTargets.includes("com.android.settings", FLAG_SYSTEM or FLAG_HAS_CODE, false))
+        assertFalse(ApplicationGlassTargets.includes("com.android.overlay", FLAG_SYSTEM, true))
+        for (name in GlassTargets.HOSTS + setOf("android", BuildConfig.APPLICATION_ID)) {
+            assertFalse(ApplicationGlassTargets.includes(name, FLAG_SYSTEM or FLAG_HAS_CODE, true))
+        }
+        assertFalse(ApplicationGlassTargets.hasUiActivity("android.app.AppDetailsActivity"))
+    }
+}

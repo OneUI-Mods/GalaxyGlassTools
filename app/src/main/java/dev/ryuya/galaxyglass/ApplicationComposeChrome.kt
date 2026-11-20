@@ -7,8 +7,8 @@ import java.lang.reflect.Modifier as JvmModifier
 import java.lang.reflect.Proxy
 import java.util.WeakHashMap
 
-/** Hooks complete Material bars. Item composables, app content and gestures stay with their owner. */
-internal class SystemAppComposeChrome(
+/** Applies glass to supported Material 2 and 3 navigation, tab and search bars. */
+internal class ApplicationComposeChrome(
     loader: ClassLoader,
     private val strength: (View) -> Int,
     private val paint: (View, Canvas, Float, Float, Int, Int) -> Unit,
@@ -23,12 +23,17 @@ internal class SystemAppComposeChrome(
         val empty = requireNotNull(modifier.getField("Companion").get(null))
         val then = modifier.getMethod("then", modifier)
         val renderers = listOf(
-            "AppBarKt" to setOf("SingleRowTopAppBar", "TwoRowsTopAppBar", "BottomAppBar"),
-            "NavigationBarKt" to setOf("NavigationBar", "ShortNavigationBar"),
-            "NavigationRailKt" to setOf("NavigationRail"),
-            "SearchBarKt" to setOf("SearchBar", "DockedSearchBar"),
+            "material3.AppBarKt" to setOf("SingleRowTopAppBar", "TwoRowsTopAppBar", "BottomAppBar"),
+            "material3.NavigationBarKt" to setOf("NavigationBar", "ShortNavigationBar"),
+            "material3.NavigationRailKt" to setOf("NavigationRail"),
+            "material3.SearchBarKt" to setOf("SearchBar", "DockedSearchBar"),
+            "material3.TabRowKt" to setOf("PrimaryTabRow", "SecondaryTabRow", "TabRow", "ScrollableTabRow"),
+            "material.AppBarKt" to setOf("TopAppBar", "BottomAppBar"),
+            "material.BottomNavigationKt" to setOf("BottomNavigation"),
+            "material.NavigationRailKt" to setOf("NavigationRail"),
+            "material.TabRowKt" to setOf("TabRow", "ScrollableTabRow"),
         ).flatMap { (owner, names) ->
-            val declarations = runCatching { type("androidx.compose.material3.$owner").declaredMethods }.getOrNull()
+            val declarations = runCatching { type("androidx.compose.$owner").declaredMethods }.getOrNull()
                 ?: return@flatMap emptyList()
             declarations.mapNotNull { method ->
                 val name = method.name.substringBefore('-')
@@ -68,6 +73,7 @@ internal class SystemAppComposeChrome(
         val unit = runCatching { type("kotlin.Unit").getField("INSTANCE").get(null) }.getOrNull()
 
         val overlays = mutableMapOf<Int, Any>()
+        val composing = ThreadLocal<Boolean>()
         for (renderer in renderers) {
             runCatching {
                 val overlay = overlays.getOrPut(renderer.radius) {
@@ -95,7 +101,7 @@ internal class SystemAppComposeChrome(
                             }
                             "equals" -> proxy === args?.firstOrNull()
                             "hashCode" -> System.identityHashCode(proxy)
-                            "toString" -> "System app glass chrome"
+                            "toString" -> "Application glass chrome"
                             else -> null
                         }
                     }
@@ -103,6 +109,7 @@ internal class SystemAppComposeChrome(
                 }
                 ModernHook.deoptimize(renderer.method)
                 ModernHook.aroundMethod(renderer.method) { chain ->
+                    if (composing.get() == true) return@aroundMethod chain.proceed()
                     val args = chain.args.toTypedArray()
                     val default = renderer.defaultIndex
                     val defaultBit = 1 shl renderer.modifierIndex
@@ -113,9 +120,14 @@ internal class SystemAppComposeChrome(
                     val changeMask = 0b111 shl (1 + renderer.modifierIndex % 10 * 3)
                     args[renderer.changedIndex] = (args[renderer.changedIndex] as Int) and changeMask.inv()
                     args[renderer.modifierIndex] = then.invoke(stock, overlay)
-                    chain.proceed(args)
+                    composing.set(true)
+                    try {
+                        chain.proceed(args)
+                    } finally {
+                        composing.remove()
+                    }
                 }
-            }.onFailure { HookEntry.log("GLASS_SYSTEM_APP_COMPOSE_METHOD_UNAVAILABLE ${renderer.method.name}") }
+            }.onFailure { HookEntry.log("GLASS_APP_COMPOSE_METHOD_UNAVAILABLE ${renderer.method.name}") }
         }
     }
 

@@ -192,6 +192,14 @@
             android:text="@string/glass_system_apps"
             android:textAppearance="@style/TextAppearance.Material3.TitleMedium" />
 
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/glass_installed_apps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/glass_installed_apps"
+            android:textAppearance="@style/TextAppearance.Material3.TitleMedium" />
+
           <TextView
             android:id="@+id/glass_system_app_scope_status"
             android:layout_width="match_parent"

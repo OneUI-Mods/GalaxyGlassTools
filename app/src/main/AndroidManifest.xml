@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <!-- The scope picker needs non-launcher system apps, including the file and media pickers. -->
+    <!-- The scope picker needs installed apps without launcher entries, including file and media pickers. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
     <queries>

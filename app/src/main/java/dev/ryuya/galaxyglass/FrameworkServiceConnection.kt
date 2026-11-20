@@ -10,7 +10,7 @@ import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** App-side API 102 handshake and settings for the additional system app scope. */
+/** App-side API 102 handshake and settings for the application scope. */
 object FrameworkServiceConnection {
     private const val TAG = "GalaxyGlassBinder"
     private val registered = AtomicBoolean()
@@ -39,7 +39,7 @@ object FrameworkServiceConnection {
                             val framework = service.frameworkName
                             val version = service.frameworkVersionCode
                             if (currentService === service && HostStartupGate.unlocked(app)) {
-                                syncSystemAppConfig(app, service)
+                                syncApplicationGlassConfig(app, service)
                             }
                             Log.i(
                                 TAG,
@@ -51,7 +51,7 @@ object FrameworkServiceConnection {
                     }
                     if (!HostStartupGate.unlocked(app) && app is Application) {
                         Handler(Looper.getMainLooper()).post {
-                            HostStartupGate.whenUnlocked(app) { publishSystemAppConfig(app) }
+                            HostStartupGate.whenUnlocked(app) { publishApplicationGlassConfig(app) }
                         }
                     }
                 }
@@ -64,24 +64,24 @@ object FrameworkServiceConnection {
         )
     }
 
-    fun publishSystemAppConfig(context: Context) {
+    fun publishApplicationGlassConfig(context: Context) {
         val app = context.applicationContext
         worker.execute {
             val service = currentService ?: return@execute
             if (!HostStartupGate.unlocked(app)) return@execute
-            runCatching { syncSystemAppConfig(app, service) }
-                .onFailure { Log.w(TAG, "SYSTEM_APP_CONFIG_UNAVAILABLE", it) }
+            runCatching { syncApplicationGlassConfig(app, service) }
+                .onFailure { Log.w(TAG, "APP_GLASS_CONFIG_UNAVAILABLE", it) }
         }
     }
 
-    private fun syncSystemAppConfig(context: Context, service: XposedService) {
+    private fun syncApplicationGlassConfig(context: Context, service: XposedService) {
         val local = context.getSharedPreferences(ConfigProvider.PREFS, Context.MODE_PRIVATE)
-        val remote = service.getRemotePreferences(SystemAppGlassConfig.REMOTE)
-        check(SystemAppGlassConfig.publish(local, remote)) { "System app appearance settings were not saved" }
-        Log.i(TAG, "SYSTEM_APP_CONFIG_SYNCED")
+        val remote = service.getRemotePreferences(ApplicationGlassConfig.REMOTE)
+        check(ApplicationGlassConfig.publish(local, remote)) { "Application appearance settings were not saved" }
+        Log.i(TAG, "APP_GLASS_CONFIG_SYNCED")
     }
 
-    fun systemAppScope(context: Context, request: Boolean, result: (ScopeResult) -> Unit) {
+    fun applicationScope(context: Context, request: Boolean, result: (ScopeResult) -> Unit) {
         val app = context.applicationContext
         worker.execute {
             val service = currentService
@@ -90,7 +90,7 @@ object FrameworkServiceConnection {
                 return@execute
             }
             runCatching {
-                val packages = SystemAppTargets.packages(app.packageManager)
+                val packages = ApplicationGlassTargets.packages(app.packageManager)
                 val scoped = service.scope.toSet()
                 val missing = packages.filterNot(scoped::contains)
                 val already = packages.size - missing.size
@@ -98,7 +98,7 @@ object FrameworkServiceConnection {
                     result(ScopeResult(ScopeState.COUNT, already, packages.size))
                     return@runCatching
                 }
-                syncSystemAppConfig(app, service)
+                syncApplicationGlassConfig(app, service)
                 result(ScopeResult(ScopeState.REQUESTED, already, packages.size))
                 service.requestScope(missing, object : XposedService.OnScopeEventListener {
                     override fun onScopeRequestApproved(approved: MutableList<String>) {
@@ -109,12 +109,12 @@ object FrameworkServiceConnection {
                     }
 
                     override fun onScopeRequestFailed(message: String) {
-                        Log.i(TAG, "SYSTEM_APP_SCOPE_NOT_APPROVED")
+                        Log.i(TAG, "APP_GLASS_SCOPE_NOT_APPROVED")
                         result(ScopeResult(ScopeState.FAILED, already, packages.size))
                     }
                 })
             }.onFailure {
-                Log.w(TAG, "SYSTEM_APP_SCOPE_UNAVAILABLE", it)
+                Log.w(TAG, "APP_GLASS_SCOPE_UNAVAILABLE", it)
                 result(ScopeResult(ScopeState.FAILED))
             }
         }

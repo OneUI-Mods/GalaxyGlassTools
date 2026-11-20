@@ -12,7 +12,10 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.database.ContentObserver
 import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Insets
 import android.graphics.Outline
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -28,14 +31,16 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.Window
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.PopupWindow
 import android.widget.Toolbar
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
-/** Draws into existing system app chrome and keeps the application's content above it. */
-internal class SystemAppGlassHost(
+/** Adds glass to app controls and the visible system-bar areas. */
+internal class ApplicationGlassHost(
     private val app: Application,
     private val prefs: SharedPreferences,
     private val process: String,
@@ -46,7 +51,7 @@ internal class SystemAppGlassHost(
     private val views = WeakHashMap<View, WindowBinding>()
     private val activityWindows = WeakHashMap<Activity, WeakReference<View>>()
     private val rolesByType = mutableMapOf<Class<*>, Int?>()
-    private val namedPlates = SystemAppTargets.plates(app.packageName).mapNotNull { (name, corner) ->
+    private val namedPlates = ApplicationGlassTargets.plates(app.packageName).mapNotNull { (name, corner) ->
         app.resources.getIdentifier(name, "id", app.packageName).takeIf { it != View.NO_ID && it != 0 }
             ?.let { it to corner }
     }.toMap()
@@ -54,13 +59,14 @@ internal class SystemAppGlassHost(
         app.resources.getIdentifier("parentPanel", "id", it)
     }.filter { it != 0 }.distinct()
     private val material by lazy { GlassMaterial(app.resources.displayMetrics.density) }
-    private var config = SystemAppGlassConfig.read(prefs)
+    private val isSystem = ApplicationGlassTargets.isSystem(app.applicationInfo)
+    private var config = ApplicationGlassConfig.read(prefs, isSystem)
     private var reduced = reduceTransparency()
     private var interactive = false
     private var resumed = WeakReference<Activity>(null)
     private var hasDrawn = false
     private var failureLogged = false
-    private var compose: SystemAppComposeChrome? = null
+    private var compose: ApplicationComposeChrome? = null
     private val composeCorners = FloatArray(8)
     private var guardStarted = false
     private var blocked = false
@@ -70,19 +76,20 @@ internal class SystemAppGlassHost(
     }
     private val readSettings = Runnable {
         safely {
-            config = SystemAppGlassConfig.read(prefs)
+            config = ApplicationGlassConfig.read(prefs, isSystem)
             if (config.strength > 0) material.tint = config.tint
             updateWindows()
             views.values.toList().forEach { it.invalidate() }
         }
     }
 
-    fun start() {
+    fun start(firstActivity: Activity?) {
         installWindowHooks()
         compose = runCatching {
-            SystemAppComposeChrome(app.classLoader, ::composeStrength, ::drawCompose)
+            ApplicationComposeChrome(app.classLoader, ::composeStrength, ::drawCompose)
         }.getOrNull()
         app.registerActivityLifecycleCallbacks(this)
+        resumed = WeakReference(firstActivity)
         prefs.registerOnSharedPreferenceChangeListener(readListener)
         app.contentResolver.registerContentObserver(
             Settings.System.getUriFor(REDUCE_TRANSPARENCY), false,
@@ -98,13 +105,14 @@ internal class SystemAppGlassHost(
                 if (intent.action == Intent.ACTION_SCREEN_OFF) {
                     interactive = false
                     views.values.toList().forEach { it.restore() }
+                    compose?.refresh()
                 } else updateWindows()
             }
         }, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
         }, Context.RECEIVER_NOT_EXPORTED)
-        HookEntry.log("GLASS_SYSTEM_APP_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
+        HookEntry.log("GLASS_APP_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
     }
 
     private fun installWindowHooks() {
@@ -128,7 +136,7 @@ internal class SystemAppGlassHost(
                 }
                 result
             }
-        }.onFailure { HookEntry.log("GLASS_SYSTEM_APP_DIALOG_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+        }.onFailure { HookEntry.log("GLASS_APP_DIALOG_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
 
         val integer = Int::class.javaPrimitiveType
         for (name in listOf("showAtLocation", "showAsDropDown")) runCatching {
@@ -151,7 +159,7 @@ internal class SystemAppGlassHost(
                 }
                 result
             }
-        }.onFailure { HookEntry.log("GLASS_SYSTEM_APP_POPUP_UNAVAILABLE ${app.packageName} $name ${it.javaClass.simpleName}") }
+        }.onFailure { HookEntry.log("GLASS_APP_POPUP_UNAVAILABLE ${app.packageName} $name ${it.javaClass.simpleName}") }
     }
 
     override fun onActivityPostResumed(activity: Activity) = safely {
@@ -203,7 +211,10 @@ internal class SystemAppGlassHost(
     }
 
     private fun drawCompose(view: View, canvas: Canvas, width: Float, height: Float, corner: Int, level: Int) {
-        val radius = (corner * view.resources.displayMetrics.density).coerceAtMost(minOf(width, height) * .5f)
+        val density = view.resources.displayMetrics.density
+        val maxThickness = if (corner == 0) 216f else 144f
+        if (minOf(width, height) > maxThickness * density) return
+        val radius = (corner * density).coerceAtMost(minOf(width, height) * .5f)
         composeCorners.fill(radius)
         material.tint = config.tint
         material.drawSurface(canvas, 0f, 0f, width, height, composeCorners, level,
@@ -215,13 +226,13 @@ internal class SystemAppGlassHost(
     private fun ensureGuard(): Boolean {
         if (!guardStarted) {
             guardStarted = true
-            val guard = runCatching { CrashGuard.enterSystemApp(app, process) }.getOrElse {
+            val guard = runCatching { CrashGuard.enterApplicationGlass(app, process) }.getOrElse {
                 blocked = true
-                HookEntry.log("GLASS_SYSTEM_APP_GUARD_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}")
+                HookEntry.log("GLASS_APP_GUARD_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}")
                 return false
             }
             blocked = guard.blocked()
-            if (blocked) HookEntry.log("GLASS_SYSTEM_APP_CRASH_GUARD ${app.packageName} process=$process")
+            if (blocked) HookEntry.log("GLASS_APP_CRASH_GUARD ${app.packageName} process=$process")
             else main.postDelayed({ guard.healthy() }, 90_000L)
         }
         return !blocked
@@ -268,7 +279,7 @@ internal class SystemAppGlassHost(
         } catch (error: Exception) {
             if (!failureLogged) {
                 failureLogged = true
-                HookEntry.log("GLASS_SYSTEM_APP_UI_UNAVAILABLE ${app.packageName} ${error.javaClass.simpleName}")
+                HookEntry.log("GLASS_APP_UI_UNAVAILABLE ${app.packageName} ${error.javaClass.simpleName}")
             }
         }
     }
@@ -285,6 +296,7 @@ internal class SystemAppGlassHost(
         private val plates = WeakHashMap<View, Plate>()
         private var observer: ViewTreeObserver? = null
         private var budget = 0
+        private var barPlate: SystemBarPlate? = null
 
         override fun onViewAttachedToWindow(view: View) {
             observer = view.viewTreeObserver.also { it.addOnGlobalLayoutListener(this) }
@@ -298,7 +310,8 @@ internal class SystemAppGlassHost(
 
         private fun enabled(root: View): Boolean {
             if (!interactive || reduced || config.strength <= 0 || !root.isAttachedToWindow || !root.isShown ||
-                owner.get()?.isDestroyed == true || resumed.get()?.javaClass?.name?.let(::sensitive) == true
+                owner.get()?.isDestroyed == true || owner.get()?.isInPictureInPictureMode == true ||
+                resumed.get()?.javaClass?.name?.let(::sensitive) == true
             ) return false
             val params = window.get()?.attributes ?: root.layoutParams as? WindowManager.LayoutParams ?: return false
             return permitted(params)
@@ -321,6 +334,28 @@ internal class SystemAppGlassHost(
             } else {
                 scan(root, 0)
             }
+            updateSystemBars(root)
+        }
+
+        private fun updateSystemBars(root: View) {
+            val activity = owner.get()
+            val insets = root.rootWindowInsets
+            val chrome = insets?.getInsets(WindowInsets.Type.systemBars()) ?: Insets.NONE
+            val appWindow = activity != null && window.get() === activity.window
+            if (!appWindow || plates.isNotEmpty() || chrome == Insets.NONE || !ensureGuard()) {
+                removeSystemBars(root)
+                return
+            }
+            val bars = barPlate ?: SystemBarPlate(root).also {
+                root.overlay.add(it)
+                barPlate = it
+            }
+            bars.setBounds(0, 0, root.width, root.height)
+        }
+
+        private fun removeSystemBars(root: View) {
+            barPlate?.let { root.overlay.remove(it) }
+            barPlate = null
         }
 
         private fun scan(view: View, depth: Int) {
@@ -362,9 +397,15 @@ internal class SystemAppGlassHost(
             else if (view.background === plate) replaceBackground(view, plate.stock)
         }
 
-        fun invalidate() = plates.values.toList().forEach(Drawable::invalidateSelf)
+        fun invalidate() {
+            plates.values.toList().forEach(Drawable::invalidateSelf)
+            barPlate?.invalidateSelf()
+        }
 
-        fun restore() = plates.entries.toList().forEach { (view, plate) -> unbind(view, plate) }
+        fun restore() {
+            plates.entries.toList().forEach { (view, plate) -> unbind(view, plate) }
+            root.get()?.let(::removeSystemBars)
+        }
 
         fun stop() {
             observer?.takeIf(ViewTreeObserver::isAlive)?.removeOnGlobalLayoutListener(this)
@@ -374,6 +415,53 @@ internal class SystemAppGlassHost(
                 if (views[it] === this) views.remove(it)
             }
             restore()
+        }
+
+        // Edge-to-edge WebView, game and custom-renderer apps still have Android's
+        // system-bar areas when they run outside immersive mode.
+        private inner class SystemBarPlate(view: View) : Drawable() {
+            private val view = WeakReference(view)
+            private val square = FloatArray(8)
+
+            override fun draw(canvas: Canvas) {
+                val root = view.get() ?: return
+                if (!canvas.isHardwareAccelerated || bounds.isEmpty || !enabled(root)) return
+                val insets = root.rootWindowInsets ?: return
+                val status = insets.getInsets(WindowInsets.Type.statusBars())
+                val navigation = insets.getInsets(WindowInsets.Type.navigationBars())
+                val appearance = root.windowInsetsController?.systemBarsAppearance ?: 0
+                val darkStatus = appearance and WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS == 0
+                val darkNavigation = appearance and WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS == 0
+                val width = bounds.width().toFloat()
+                val height = bounds.height().toFloat()
+                safely {
+                    material.tint = config.tint
+                    if (status.top > 0) paint(canvas, 0f, 0f, width, status.top.toFloat(), darkStatus)
+                    if (navigation.bottom > 0) {
+                        paint(canvas, 0f, height - navigation.bottom, width, height, darkNavigation)
+                    }
+                    if (navigation.left > 0) {
+                        paint(canvas, 0f, status.top.toFloat(), navigation.left.toFloat(),
+                            height - navigation.bottom, darkNavigation)
+                    }
+                    if (navigation.right > 0) {
+                        paint(canvas, width - navigation.right, status.top.toFloat(), width,
+                            height - navigation.bottom, darkNavigation)
+                    }
+                }
+            }
+
+            private fun paint(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float, dark: Boolean) {
+                if (left >= right || top >= bottom) return
+                material.drawSurface(canvas, left, top, right, bottom, square, config.strength, dark,
+                    fill = true, rim = true, opacity = .38f, profile = GlassMaterial.Profile.SYSTEM_SURFACE)
+                didDraw()
+            }
+
+            override fun setAlpha(alpha: Int) = Unit
+            override fun setColorFilter(filter: ColorFilter?) = Unit
+            @Deprecated("Required by Drawable")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
         }
 
         private inner class Plate(
@@ -410,7 +498,7 @@ internal class SystemAppGlassHost(
     private fun didDraw() {
         if (!hasDrawn) {
             hasDrawn = true
-            HookEntry.log("GLASS_SYSTEM_APP_DRAWN ${app.packageName} build=${BuildConfig.VERSION_CODE}")
+            HookEntry.log("GLASS_APP_DRAWN ${app.packageName} build=${BuildConfig.VERSION_CODE}")
         }
     }
 
@@ -432,8 +520,12 @@ internal class SystemAppGlassHost(
         val COMMON_WIDGETS = mapOf(
             "androidx.appcompat.widget.Toolbar" to 0,
             "androidx.appcompat.widget.ActionBarContainer" to 0,
+            "com.android.internal.widget.ActionBarContainer" to 0,
+            "com.google.android.material.bottomappbar.BottomAppBar" to 0,
+            "com.google.android.material.tabs.TabLayout" to 0,
             "com.google.android.material.bottomnavigation.BottomNavigationView" to 0,
             "com.google.android.material.navigationrail.NavigationRailView" to 0,
+            "com.google.android.material.navigation.NavigationView" to 0,
             "com.google.android.material.search.SearchBar" to 24,
             "androidx.appcompat.widget.SearchView" to 20,
             "androidx.cardview.widget.CardView" to 24,
