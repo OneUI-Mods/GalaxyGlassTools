@@ -29,6 +29,7 @@ internal class GlassHost(
     activity: Activity?,
     private val briefOnly: Boolean = false,
     private val systemSurfacesOnly: Boolean = false,
+    private val homeEdgeOnly: Boolean = false,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val worker = BackgroundExecutors.serial("OneUiGlassConfig")
@@ -50,6 +51,7 @@ internal class GlassHost(
     private var systemSurfaces: GlassSystemSurfaces? = null
     private var lockScreenState: GlassLockScreenState? = null
     private var dock: GlassHomeSurfaces? = null
+    private var edgeSettings: GlassLauncherControls? = null
     private var shadeTouchInstalled = false
     private var drawScheduled = false
     private val shadeLight = GlassTouchLight {
@@ -68,16 +70,22 @@ internal class GlassHost(
 
     fun start() {
         if (Build.VERSION.SDK_INT < 33 || !GlassTargets.supportsSystemGlass()) return
+        if (homeEdgeOnly) {
+            edgeSettings = GlassLauncherControls(app, loader, {
+                if (appearance.home && keyguard?.isKeyguardLocked == false) appearance.strength else 0
+            }, ::isNight, material, {}, ::reportSurface, edgeSettingsOnly = true)
+        }
         if (briefOnly) popups = createPopups()
         if (systemUi && !briefOnly && !systemSurfacesOnly) {
             volumePlugin = runCatching { VolumePluginDiscovery(loader) }
                 .onFailure { HookEntry.log("GLASS_VOLUME_PLUGIN_UNAVAILABLE ${it.javaClass.simpleName}") }.getOrNull()
         }
-        if (systemSurfacesOnly && Build.VERSION.SDK_INT >= 33 && Looper.myLooper() == main.looper) {
-            // Screenshot and freeform can inflate their first window before settings I/O completes.
+        if (systemUi && !briefOnly && Looper.myLooper() == main.looper) {
+            // Catch the first inflation even when the appearance settings are still loading.
             prepareSystemHelper()
         }
         main.post {
+            if (systemUi && !briefOnly) prepareSystemHelper()
             nightMode = app.resources.configuration.isNightModeActive
             app.registerComponentCallbacks(object : ComponentCallbacks {
                 override fun onConfigurationChanged(configuration: Configuration) {
@@ -100,7 +108,7 @@ internal class GlassHost(
                 }
                 trackKeyguard()
             }
-            else if (Build.VERSION.SDK_INT >= 33) trackHomeActivity()
+            else if (Build.VERSION.SDK_INT >= 33 && !homeEdgeOnly) trackHomeActivity()
             val uri = requireNotNull(ConfigProvider.URI)
             app.contentResolver.registerContentObserver(uri, false, object : ContentObserver(main) {
                 override fun onChange(selfChange: Boolean) = read()
@@ -251,7 +259,7 @@ internal class GlassHost(
             }
             if (quick == null) runCatching { installQuickSurfaces() }
                 .onFailure { HookEntry.log("GLASS_COMPOSE_PLATES_UNAVAILABLE ${it.javaClass.simpleName}") }
-        } else if (!systemUi) {
+        } else if (!systemUi && !homeEdgeOnly) {
             update(GlassAppearance.HOME, next.home, dock != null) {
                 dock = GlassHomeSurfaces(app, loader, main, worker, { if (appearance.home) appearance.strength else 0 },
                     ::isNight, material, { markDrawn(GlassAppearance.HOME) }, ::reportSurface)
@@ -322,6 +330,7 @@ internal class GlassHost(
         volume?.refresh()
         systemSurfaces?.refresh()
         dock?.refresh()
+        edgeSettings?.refresh()
     }
 
     @RequiresApi(33)

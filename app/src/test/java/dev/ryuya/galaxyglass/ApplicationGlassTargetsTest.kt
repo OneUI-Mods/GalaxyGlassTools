@@ -37,4 +37,14 @@ class ApplicationGlassTargetsTest {
         assertFalse(ApplicationGlassTargets.usesOverlay("example.browser", toolbar))
         assertTrue("sem_more_apps_grid_view" in ApplicationGlassTargets.plates("com.android.intentresolver"))
     }
+
+    @Test
+    fun matchesResolverTabsByLayoutAndKeepsTheAnchorPackageSpecific() {
+        val tab = "resolver_profile_tab_button"
+        for (resolver in listOf("com.android.intentresolver", "com.google.android.intentresolver")) {
+            assertTrue(tab in ApplicationGlassTargets.layoutPlates(resolver))
+            assertFalse(tab in ApplicationGlassTargets.plates(resolver))
+        }
+        assertFalse(tab in ApplicationGlassTargets.layoutPlates("com.android.settings"))
+    }
 }

@@ -400,7 +400,8 @@ internal class GlassSystemSurfaces(
     }
 
     private inner class Scope(root: View, val spec: GlassSystemCatalog.Surface) :
-        View.OnAttachStateChangeListener, View.OnLayoutChangeListener, ViewTreeObserver.OnPreDrawListener {
+        View.OnAttachStateChangeListener, View.OnLayoutChangeListener, ViewTreeObserver.OnPreDrawListener,
+        ViewTreeObserver.OnGlobalLayoutListener {
         val view = WeakReference(root)
         private val effects = WeakHashMap<View, GlassSystemSurfaceEffect>()
         private val blur = DialogBlur()
@@ -412,8 +413,9 @@ internal class GlassSystemSurfaces(
         override fun onViewAttachedToWindow(view: View) {
             if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) notificationPlates[view] = Unit
             view.addOnLayoutChangeListener(this)
-            if (spec.name in EXISTING_PANEL_PLATES) {
-                panelObserver = view.viewTreeObserver.also { it.addOnPreDrawListener(this) }
+            panelObserver = view.viewTreeObserver.also { observer ->
+                observer.addOnGlobalLayoutListener(this)
+                if (spec.name in EXISTING_PANEL_PLATES) observer.addOnPreDrawListener(this)
             }
             OneShotPreDrawListener.add(view, ::refresh)
         }
@@ -421,20 +423,24 @@ internal class GlassSystemSurfaces(
         override fun onViewDetachedFromWindow(view: View) {
             if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) notificationPlates.remove(view)
             view.removeOnLayoutChangeListener(this)
-            panelObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(this)
+            panelObserver?.takeIf { it.isAlive }?.let { observer ->
+                observer.removeOnGlobalLayoutListener(this)
+                if (spec.name in EXISTING_PANEL_PLATES) observer.removeOnPreDrawListener(this)
+            }
             panelObserver = null
             panelStrength = -1
             restore()
         }
 
         override fun onPreDraw(): Boolean {
-            val root = view.get() ?: return true
-            val current = visibleStrength(root)
-            if (current != panelStrength) {
-                panelStrength = current
-                refresh()
-            }
+            onGlobalLayout()
             return true
+        }
+
+        override fun onGlobalLayout() {
+            val root = view.get() ?: return
+            val current = visibleStrength(root)
+            if (current != panelStrength) refresh()
         }
 
         override fun onLayoutChange(
@@ -473,11 +479,12 @@ internal class GlassSystemSurfaces(
 
         fun refresh() = safely(spec.name) {
             val root = view.get() ?: return@safely
+            val level = visibleStrength(root)
+            panelStrength = level
             if (spec.notificationControls != null) {
                 if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) root.invalidate()
                 return@safely
             }
-            val level = visibleStrength(root)
             if (level <= 0) {
                 restore()
                 return@safely

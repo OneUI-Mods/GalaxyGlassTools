@@ -116,10 +116,11 @@ internal class GlassMaterial(private val density: Float) {
         opacity: Float = 1f,
         profile: Profile = Profile.STANDARD,
         contour: Path? = null,
-    ) {
+    ): Boolean {
         val width = right - left
         val height = bottom - top
-        if (width < 6f * density || height < 6f * density || strength <= 0 || opacity <= 0f) return
+        if (width < 6f * density || height < 6f * density || strength <= 0 || opacity <= 0f ||
+            canvas.quickReject(left, top, right, bottom)) return false
         val lighting = Lighting(height.toInt(), width.toInt(), strength.coerceIn(0, 100), dark, tint, profile)
         val finish = gradients.getOrPut(lighting) { lighting.build() }
         // A single line follows the native corner curve just inside the clip.
@@ -143,6 +144,7 @@ internal class GlassMaterial(private val density: Float) {
         val save = canvas.save()
         try {
             canvas.translate(left, top)
+            if (canvas.quickReject(outline)) return false
             paint.alpha = (255 * opacity).toInt().coerceIn(0, 255)
             if (fill) {
                 paint.style = Paint.Style.FILL
@@ -174,6 +176,7 @@ internal class GlassMaterial(private val density: Float) {
             paint.alpha = 255
             canvas.restoreToCount(save)
         }
+        return true
     }
 
     private fun Lighting.build(): Finish {

@@ -15,9 +15,12 @@ import android.database.ContentObserver
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Insets
+import android.graphics.Matrix
 import android.graphics.Outline
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.DrawableWrapper
@@ -28,6 +31,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.InputType
+import android.view.LayoutInflater
 import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
@@ -58,6 +62,7 @@ internal class ApplicationGlassHost(
     private val plateNames = ApplicationGlassTargets.plates(app.packageName) + ApplicationGlassTargets.sheetPlates
     private val inputMethodPlateNames = ApplicationGlassTargets.inputMethodPlates(app.packageName)
     private val namedPlates = resolvePlates(plateNames)
+    private val inflatedPlates = WeakHashMap<View, Int>()
     private val inputPlateIds: Map<Int, Int> = resolvePlates(inputMethodPlateNames)
     private val splitPlates = WeakHashMap<Resources, MutableMap<Int, Int?>>()
     private val sheetPanelId = app.resources.getIdentifier("design_bottom_sheet", "id", app.packageName)
@@ -93,6 +98,7 @@ internal class ApplicationGlassHost(
 
     fun start(firstActivity: Activity?) {
         installWindowHooks()
+        installLayoutPlates()
         if (inputMethodPlateNames.isNotEmpty()) installInputMethodHooks()
         prepareCompose(firstActivity?.classLoader ?: app.classLoader)
         app.registerActivityLifecycleCallbacks(this)
@@ -123,10 +129,37 @@ internal class ApplicationGlassHost(
         HookEntry.log("GLASS_APP_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
     }
 
-    private fun resolvePlates(names: Map<String, Int>): Map<Int, Int> =
+    private fun resolvePlates(names: Map<String, Int>, type: String = "id"): Map<Int, Int> =
         names.mapNotNull { (name, corner) ->
-            app.resources.getIdentifier(name, "id", app.packageName).takeIf { it != 0 }?.let { it to corner }
+            app.resources.getIdentifier(name, type, app.packageName).takeIf { it != 0 }?.let { it to corner }
         }.toMap()
+
+    private fun installLayoutPlates() {
+        val layouts = resolvePlates(ApplicationGlassTargets.layoutPlates(app.packageName), "layout")
+        if (layouts.isEmpty()) return
+        runCatching {
+            val inflate = LayoutInflater::class.java.getMethod(
+                "inflate", Int::class.javaPrimitiveType, ViewGroup::class.java, Boolean::class.javaPrimitiveType,
+            )
+            ModernHook.aroundMethod(inflate) { chain ->
+                val radius = layouts[chain.args[0] as Int] ?: return@aroundMethod chain.proceed()
+                val parent = chain.args[1] as? ViewGroup
+                val before = parent?.childCount ?: 0
+                val result = chain.proceed()
+                val children = if (parent != null && result === parent) {
+                    (before until parent.childCount).map(parent::getChildAt)
+                } else listOfNotNull(result as? View)
+                val bind: () -> Unit = {
+                    for (child in children.filter(::belongsToApp)) {
+                        inflatedPlates[child] = radius
+                        views[child.rootView]?.refresh()
+                    }
+                }
+                if (main.looper.isCurrentThread) bind() else main.post(bind)
+                result
+            }
+        }.onFailure { HookEntry.log("GLASS_APP_LAYOUT_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+    }
 
     private fun prepareCompose(loader: ClassLoader) {
         if (!composeLoaders.add(loader)) return
@@ -291,11 +324,10 @@ internal class ApplicationGlassHost(
         val radius = (surface.radius * density).coerceAtMost(minOf(width, height) * .5f)
         composeCorners.fill(radius)
         material.tint = config.tint
-        material.drawSurface(canvas, 0f, 0f, width, height, composeCorners, level,
+        if (material.drawSurface(canvas, 0f, 0f, width, height, composeCorners, level,
             view.resources.configuration.isNightModeActive, fill = surface.panel, rim = true,
             opacity = if (surface.panel) .45f else 1f,
-            profile = GlassMaterial.Profile.SYSTEM_SURFACE)
-        didDraw()
+            profile = GlassMaterial.Profile.SYSTEM_SURFACE)) didDraw()
     }
 
     private fun ensureGuard(): Boolean {
@@ -356,6 +388,7 @@ internal class ApplicationGlassHost(
 
     private fun corner(view: View, ime: Boolean): Int? {
         if (ime) return inputPlateIds[view.id]
+        inflatedPlates[view]?.let { return it }
         namedPlates[view.id]?.let { return it }
         if (ApplicationGlassTargets.usesOverlay(app.packageName, view.javaClass.name)) return 0
         if (view.id != 0 && view.id != View.NO_ID && view.resources !== app.resources) {
@@ -398,6 +431,11 @@ internal class ApplicationGlassHost(
         private val pending = ArrayDeque<View>()
         private var scanPosted = false
         private var scanAgain = false
+        private var rescanPosted = false
+        private val rescan = Runnable {
+            rescanPosted = false
+            safely { refresh() }
+        }
         private val continueScan = Runnable {
             scanPosted = false
             safely {
@@ -432,13 +470,14 @@ internal class ApplicationGlassHost(
                 restore()
                 return
             }
-            plates.entries.toList().forEach { (view, plate) ->
-                if (!view.isAttachedToWindow || view.rootView !== root || !view.isShown) unbind(view, plate)
-                else if (plate.overlay) plate.setBounds(0, 0, view.width, view.height)
-            }
             if (scanPosted) {
                 scanAgain = true
                 return
+            }
+            if (rescanPosted) return
+            plates.entries.toList().forEach { (view, plate) ->
+                if (!view.isAttachedToWindow || view.rootView !== root || !view.isShown) unbind(view, plate)
+                else if (plate.overlay) plate.setBounds(0, 0, view.width, view.height)
             }
             pending.addLast(panel.get() ?: root)
             scanBatch(root)
@@ -478,14 +517,16 @@ internal class ApplicationGlassHost(
                     for (index in view.childCount - 1 downTo 0) pending.addFirst(view.getChildAt(index))
                 }
             }
-            updateSystemBars(root)
-            if (pending.isEmpty() && scanAgain) {
-                scanAgain = false
-                pending.addLast(dedicated ?: root)
-            }
             if (pending.isNotEmpty()) {
                 scanPosted = true
                 root.postOnAnimation(continueScan)
+            } else {
+                updateSystemBars(root)
+                if (scanAgain) {
+                    scanAgain = false
+                    rescanPosted = true
+                    root.postDelayed(rescan, RESCAN_DELAY_MS)
+                }
             }
         }
 
@@ -520,9 +561,13 @@ internal class ApplicationGlassHost(
         }
 
         fun restore() {
-            if (scanPosted) root.get()?.removeCallbacks(continueScan)
+            root.get()?.let { root ->
+                if (scanPosted) root.removeCallbacks(continueScan)
+                if (rescanPosted) root.removeCallbacks(rescan)
+            }
             scanPosted = false
             scanAgain = false
+            rescanPosted = false
             pending.clear()
             plates.entries.toList().forEach { (view, plate) -> unbind(view, plate) }
             root.get()?.let(::removeSystemBars)
@@ -543,8 +588,18 @@ internal class ApplicationGlassHost(
         private inner class SystemBarPlate(view: View) : Drawable() {
             private val view = WeakReference(view)
             private val square = FloatArray(8)
-            private val rootLocation = IntArray(2)
-            private val plateLocation = IntArray(2)
+            private val rootToScreen = Matrix()
+            private val screenToRoot = Matrix()
+            private val plateToScreen = Matrix()
+            private val plateToRoot = Matrix()
+            private val barRegion = Path()
+            private val occupied = Path()
+            private val plateShape = Path()
+            private val plateClip = Path()
+            private val visible = Rect()
+            private val contentRegion = RectF()
+            private val projected = RectF()
+            private val band = Path()
 
             override fun draw(canvas: Canvas) {
                 val root = view.get() ?: return
@@ -561,16 +616,18 @@ internal class ApplicationGlassHost(
                 val top = maxOf(status.top, caption.top, navigation.top).toFloat()
                 val darkCaption = root.resources.configuration.isNightModeActive
                 safely {
+                    val bottom = height - navigation.bottom
+                    barRegion.rewind()
+                    barRegion.addRect(0f, 0f, width, top, Path.Direction.CW)
+                    barRegion.addRect(0f, bottom, width, height, Path.Direction.CW)
+                    barRegion.addRect(0f, top, navigation.left.toFloat(), bottom, Path.Direction.CW)
+                    barRegion.addRect(width - navigation.right, top, width, bottom, Path.Direction.CW)
+                    contentRegion.set(navigation.left.toFloat(), top, width - navigation.right, bottom)
+                    subtractDrawnPlates(root)
+                    if (barRegion.isEmpty) return@safely
                     val saved = canvas.save()
                     try {
-                        root.getLocationInWindow(rootLocation)
-                        for (plate in plates.keys) {
-                            if (!plate.isShown) continue
-                            plate.getLocationInWindow(plateLocation)
-                            val left = plateLocation[0] - rootLocation[0]
-                            val y = plateLocation[1] - rootLocation[1]
-                            canvas.clipOutRect(left, y, left + plate.width, y + plate.height)
-                        }
+                        if (!canvas.clipPath(barRegion)) return@safely
                         material.tint = config.tint
                         paint(canvas, 0f, 0f, width, status.top.toFloat(), darkStatus)
                         paint(canvas, 0f, status.top.toFloat(), width, caption.top.toFloat(), darkCaption)
@@ -584,11 +641,40 @@ internal class ApplicationGlassHost(
                 }
             }
 
+            private fun subtractDrawnPlates(root: View) {
+                occupied.rewind()
+                if (plates.isEmpty()) return
+                rootToScreen.reset()
+                root.transformMatrixToGlobal(rootToScreen)
+                if (!rootToScreen.invert(screenToRoot)) return
+                for ((view, plate) in plates) {
+                    if (!view.isShown || (!plate.overlay && view.background !== plate) ||
+                        !view.getLocalVisibleRect(visible)) continue
+                    plateToScreen.reset()
+                    view.transformMatrixToGlobal(plateToScreen)
+                    plateToRoot.setConcat(screenToRoot, plateToScreen)
+                    projected.set(visible)
+                    plateToRoot.mapRect(projected)
+                    if (contentRegion.contains(projected) || !plate.shapeForClipping(view, plateShape)) continue
+                    // Respect scrolling and clipping before moving the rounded plate into window coordinates.
+                    plateClip.rewind()
+                    plateClip.addRect(visible.left.toFloat(), visible.top.toFloat(), visible.right.toFloat(),
+                        visible.bottom.toFloat(), Path.Direction.CW)
+                    if (!plateShape.op(plateClip, Path.Op.INTERSECT) || plateShape.isEmpty) continue
+                    occupied.addPath(plateShape, plateToRoot)
+                }
+                if (!occupied.isEmpty) barRegion.op(occupied, Path.Op.DIFFERENCE)
+            }
+
             private fun paint(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float, dark: Boolean) {
                 if (left >= right || top >= bottom) return
-                material.drawSurface(canvas, left, top, right, bottom, square, config.strength, dark,
-                    fill = true, rim = true, opacity = .38f, profile = GlassMaterial.Profile.SYSTEM_SURFACE)
-                didDraw()
+                if (!occupied.isEmpty) {
+                    band.rewind()
+                    band.addRect(left, top, right, bottom, Path.Direction.CW)
+                    if (band.op(barRegion, Path.Op.INTERSECT) && band.isEmpty) return
+                }
+                if (material.drawSurface(canvas, left, top, right, bottom, square, config.strength, dark,
+                    fill = true, rim = true, opacity = .38f, profile = GlassMaterial.Profile.SYSTEM_SURFACE)) didDraw()
             }
 
             override fun setAlpha(alpha: Int) = Unit
@@ -611,20 +697,34 @@ internal class ApplicationGlassHost(
                 val windowRoot = root.get() ?: return
                 if (!canvas.isHardwareAccelerated || bounds.isEmpty || !enabled(windowRoot)) return
                 safely {
-                    stockOutline.setEmpty()
-                    val boundary = if (overlay) target.background else stock
-                    boundary?.getOutline(stockOutline)
-                    val outlined = stockOutline.getRect(shape) && shape.intersect(bounds)
-                    if (!outlined) shape.set(bounds)
-                    val radius = stockOutline.radius.takeIf { outlined && it > 0f }
-                        ?: (corner * target.resources.displayMetrics.density)
-                    radii.fill(radius.coerceAtMost(minOf(shape.width(), shape.height()) * .5f))
-                    material.drawSurface(canvas, shape.left.toFloat(), shape.top.toFloat(), shape.right.toFloat(),
+                    radii.fill(resolveShape(target))
+                    if (material.drawSurface(canvas, shape.left.toFloat(), shape.top.toFloat(), shape.right.toFloat(),
                         shape.bottom.toFloat(), radii, config.strength, target.resources.configuration.isNightModeActive,
                         fill = !overlay || canvasToolbar, rim = true, opacity = if (canvasToolbar) .45f else 1f,
-                        profile = GlassMaterial.Profile.SYSTEM_SURFACE)
-                    didDraw()
+                        profile = GlassMaterial.Profile.SYSTEM_SURFACE)) didDraw()
                 }
+            }
+
+            fun shapeForClipping(target: View, path: Path): Boolean {
+                val radius = resolveShape(target)
+                val minimum = 6f * app.resources.displayMetrics.density
+                // A rim-only overlay does not fill the region inside its outline.
+                if ((overlay && !canvasToolbar) || shape.width() < minimum || shape.height() < minimum) return false
+                path.rewind()
+                path.addRoundRect(shape.left.toFloat(), shape.top.toFloat(), shape.right.toFloat(),
+                    shape.bottom.toFloat(), radius, radius, Path.Direction.CW)
+                return true
+            }
+
+            private fun resolveShape(target: View): Float {
+                stockOutline.setEmpty()
+                val boundary = if (overlay) target.background else stock
+                boundary?.getOutline(stockOutline)
+                val outlined = stockOutline.getRect(shape) && shape.intersect(bounds)
+                if (!outlined) shape.set(bounds)
+                val radius = stockOutline.radius.takeIf { outlined && it > 0f }
+                    ?: (corner * target.resources.displayMetrics.density)
+                return radius.coerceIn(0f, (minOf(shape.width(), shape.height()) * .5f).coerceAtLeast(0f))
             }
         }
     }
@@ -650,6 +750,7 @@ internal class ApplicationGlassHost(
     private companion object {
         const val REDUCE_TRANSPARENCY = "accessibility_reduce_transparency"
         const val VIEWS_PER_BATCH = 240
+        const val RESCAN_DELAY_MS = 80L
         val PRIVATE_INPUT_TYPES = setOf(
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,

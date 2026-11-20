@@ -44,21 +44,31 @@ class HookEntry : XposedModule() {
         if (!supported) return
         val helper = target == SYSTEM_UI && CrashGuard.isSystemUiAppearanceHelper(process)
         val capture = target == CAPTURE && (process == CAPTURE || process.startsWith("$CAPTURE:"))
-        if (!helper && !capture && process != target) return
+        val homeEdge = target == LAUNCHER && process == "$LAUNCHER:cocktailsettings"
+        if (!helper && !capture && !homeEdge && process != target) return
         val attach = Application::class.java.getDeclaredMethod("attach", Context::class.java)
         ModernHook.aroundMethod(attach) { chain ->
             val result = chain.proceed()
             val app = chain.thisObject as Application
             if (app.packageName == target) HostStartupGate.whenUnlocked(app) { activity ->
                 runCatching {
-                    if (!capture) DexSymbols.configure(app)
-                    val guard = if (helper) CrashGuard.enterSystemUiAppearanceHelper(app, process) else
-                        CrashGuard.enter(app)
+                    if (!capture && !homeEdge) DexSymbols.configure(app)
+                    val guard = when {
+                        helper -> CrashGuard.enterSystemUiAppearanceHelper(app, process)
+                        homeEdge -> CrashGuard.enterApplicationGlass(app, process)
+                        else -> CrashGuard.enter(app)
+                    }
                     if (guard.blocked()) {
-                        HostStatus.reportFeature(app, if (capture) CAPTURE_SETTING else if (target == LAUNCHER)
-                            GlassAppearance.HOME else GlassAppearance.SYSTEM_SURFACES, "CRASH_GUARD", "", BuildConfig.VERSION_CODE)
+                        val feature = when {
+                            capture -> CAPTURE_SETTING
+                            homeEdge -> "glass_home_edge_settings"
+                            target == LAUNCHER -> GlassAppearance.HOME
+                            else -> GlassAppearance.SYSTEM_SURFACES
+                        }
+                        HostStatus.reportFeature(app, feature, "CRASH_GUARD", "", BuildConfig.VERSION_CODE)
                     } else {
                         if (capture) GlassCaptureHost(app, param.classLoader).start()
+                        else if (homeEdge) GlassHost(app, param.classLoader, null, homeEdgeOnly = true).start()
                         else DexSymbols.whenPrepared(app) {
                             runCatching {
                                 GlassHost(app, param.classLoader, activity?.takeUnless { it.isDestroyed },

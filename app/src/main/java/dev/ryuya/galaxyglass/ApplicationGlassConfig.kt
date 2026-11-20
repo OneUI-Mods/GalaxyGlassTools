@@ -94,7 +94,6 @@ internal object ApplicationGlassTargets {
         "com.google.android.documentsui", "com.android.documentsui" -> mapOf("search_plate" to 22)
         "com.android.intentresolver", "com.google.android.intentresolver" -> mapOf(
             "chooser_dialog_content" to 24,
-            "resolver_profile_tab_button" to 20,
             "sem_chooser_select_apps_fragment_root_view" to 24,
             "sem_more_apps_grid_view" to 22,
         )
@@ -103,6 +102,11 @@ internal object ApplicationGlassTargets {
             "location_bar_background_view" to 22,
             "hub_toolbar" to 0,
         )
+        else -> emptyMap()
+    }
+
+    fun layoutPlates(packageName: String): Map<String, Int> = when (packageName) {
+        "com.android.intentresolver", "com.google.android.intentresolver" -> mapOf("resolver_profile_tab_button" to 20)
         else -> emptyMap()
     }
 

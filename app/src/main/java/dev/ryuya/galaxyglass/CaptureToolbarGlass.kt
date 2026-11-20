@@ -45,7 +45,8 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             if (layout == 0) continue
             val anchors = views.mapNotNull { anchor ->
                 val id = anchor.name?.let { resources.getIdentifier(it, "id", packageName) }
-                if (id == 0) null else Target(id, anchor.cornerDp, anchor.ancestors)
+                val within = anchor.within?.let { resources.getIdentifier(it, "id", packageName) }
+                if (id == 0 || within == 0) null else Target(id, anchor.cornerDp, anchor.ancestors, within)
             }
             if (anchors.isNotEmpty()) put(layout, Targets(name, anchors))
         }
@@ -55,8 +56,10 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
         }
     }
 
-    private data class Anchor(val name: String?, val cornerDp: Int? = null, val ancestors: Int = 0)
-    private data class Target(val id: Int?, val cornerDp: Int?, val ancestors: Int)
+    private data class Anchor(
+        val name: String?, val cornerDp: Int? = null, val ancestors: Int = 0, val within: String? = null,
+    )
+    private data class Target(val id: Int?, val cornerDp: Int?, val ancestors: Int, val within: Int?)
     private data class Targets(val name: String, val anchors: List<Target>)
 
     private fun install(loader: ClassLoader?) {
@@ -90,7 +93,9 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
                             continue
                         }
                         for (anchor in spec.anchors) {
-                            var view = if (anchor.id == null) root else root.findViewById<View>(anchor.id)
+                            val section = if (anchor.within == null) root
+                                else root.findViewById<View>(anchor.within) ?: continue
+                            var view = if (anchor.id == null) section else section.findViewById<View>(anchor.id)
                             repeat(anchor.ancestors) { view = view?.parent as? View }
                             if (anchor.ancestors > 0 && view?.background == null) continue
                             if (view != null) bind(view, spec.name, anchor.cornerDp)
@@ -244,14 +249,14 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
         Settings.System.getInt(runtime.context.contentResolver, REDUCE_TRANSPARENCY, 0) != 0
 
     private fun createPlate(layout: String, cornerDp: Int?) =
-        Plate(cornerDp, { runtime.strength }, rimOnly = layout == CAMERA_FRAME) { didDraw(layout) }
+        Plate(cornerDp, runtime, rimOnly = layout == CAMERA_FRAME) { didDraw(layout) }
 
     private fun didDraw(layout: String) {
         runtime.didDraw()
         if (reported.add(layout)) Hooks.log("CAPTURE_TOOLBAR_GLASS_DRAWN $layout")
     }
 
-    private class Plate(private val cornerDp: Int?, private val strength: () -> Int,
+    private class Plate(private val cornerDp: Int?, private val runtime: GlassCaptureRuntime,
         val rimOnly: Boolean, private val onDrawn: () -> Unit) : Drawable() {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val outline = Outline()
@@ -273,7 +278,8 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             }
             if (background !is ColorDrawable && background !is GradientDrawable) return
             if (background.alpha != appliedAlpha) stockAlpha = background.alpha
-            val alpha = stockAlpha * (400 - strength().coerceIn(0, 100)) / 400
+            val alpha = (stockAlpha * (1f - runtime.strength * runtime.stockTransparency / 400f)).toInt()
+                .coerceIn(0, stockAlpha)
             if (alpha != background.alpha) background.mutate().alpha = alpha
             appliedAlpha = alpha
         }
@@ -316,13 +322,15 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             pathBounds.set(bounds)
             pathBounds.inset(line, line)
             val curve = (radius - line).coerceAtLeast(0f)
-            paint.alpha = 255 * strength().coerceIn(0, 100) / 100
+            val intensity = 255 * runtime.strength.coerceIn(0, 100) / 100
             if (!rimOnly) {
+                paint.alpha = (intensity * runtime.faceTint).toInt().coerceIn(0, 255)
                 paint.style = Paint.Style.FILL
                 paint.shader = face
                 canvas.drawRoundRect(pathBounds, curve, curve, paint)
             }
             paint.style = Paint.Style.STROKE
+            paint.alpha = intensity
             paint.strokeWidth = line
             paint.shader = rim
             canvas.drawRoundRect(pathBounds, curve, curve, paint)
@@ -396,6 +404,12 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             "ai_select_capsule_popup_capsule_layout" to capsuleMenu,
             "ai_select_capsule_popup_window_list_item_view" to anchors("entity_item_layout", cornerDp = 18),
             "ai_select_translate_lang_dialog_popup" to anchors("language_select_dialog_layout", cornerDp = 22),
+            "ai_select_translate_language_select_dialog" to listOf(
+                Anchor("language_select_dialog_layout", 22, within = "source_language_dialog"),
+                Anchor("language_select_dialog_layout", 22, within = "target_language_dialog"),
+            ),
+            "screen_recorder_pip_size_settings" to listOf(Anchor(null, 24)),
+            "settings_screenshot_toolbar_layout" to anchors("screenshot_toolbar_layout_container", cornerDp = 24),
             "ai_select_translate_lang_change_layout" to
                 listOf(Anchor("ai_select_translate_lang_change_close_button", cornerDp = 20, ancestors = 2)),
             "language_select_dialog_popup" to anchors("language_select_dialog_inner_layout", cornerDp = 22),

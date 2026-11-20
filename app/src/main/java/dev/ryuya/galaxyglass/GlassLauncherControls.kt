@@ -48,6 +48,7 @@ internal class GlassLauncherControls(
     private val material: GlassMaterial,
     private val onDrawn: () -> Unit,
     private val onSurface: (String, GlassSurfaceStage) -> Unit,
+    private val edgeSettingsOnly: Boolean = false,
 ) {
     private enum class Role(val tag: String) {
         MENU("quick_options"), ARROW("quick_options_arrow"), MENU_TITLE("quick_options_title"),
@@ -66,7 +67,7 @@ internal class GlassLauncherControls(
         WIDGET_PREVIEW_GROUP("widget_preview_group"), PAGE_EDIT_ACTION("home_page_edit_action"),
         WIDGET_PICKER_SHEET("widget_picker_sheet"), WINDOW_OPTIONS("window_options"),
         FINDER_RESULT("finder_result"), DESKTOP_TASK_SWITCHER("desktop_task_switcher"),
-        DESKTOP_TIP("desktop_tip"),
+        DESKTOP_TIP("desktop_tip"), EDGE_PANEL("edge_panel"), EDGE_SETTINGS("edge_settings"),
     }
 
     private data class PlateAnchor(val viewId: Int, val role: Role, val parent: Boolean = false)
@@ -103,6 +104,7 @@ internal class GlassLauncherControls(
     ).filterKeys { it != 0 }
     private val nativePlates = buildMap<Int, MutableList<PlateAnchor>> {
         fun add(layout: String, view: String?, role: Role, parent: Boolean = false) {
+            if (edgeSettingsOnly && role != Role.EDGE_SETTINGS) return
             val layoutId = resources.getIdentifier(layout, "layout", launcher)
             val viewId = view?.let(::id) ?: View.NO_ID
             if (layoutId != 0 && viewId != 0) {
@@ -138,6 +140,11 @@ internal class GlassLauncherControls(
         add("taskbar_tips", "tips_container", Role.TASKBAR_TIPS)
         add("more_task_pot_main", "recycler_view_container", Role.TASKBAR_OVERFLOW)
         add("layout_taskbar_pot_view", "task_bar_bg", Role.TASKBAR)
+        add("layout_taskbar_status_panel", "status_panel_container", Role.TASKBAR)
+        add("edge_panel_view", "panel_root_view", Role.EDGE_PANEL)
+        add("apps_panel_main_layout", "apps_panel_main_root", Role.EDGE_PANEL)
+        add("setting_edge_panel", null, Role.EDGE_SETTINGS)
+        add("edge_panel_routine_setting_layout", null, Role.EDGE_SETTINGS)
         add("dex_digital_well_being_layout", "banner", Role.DEX_WELLBEING)
         add("home_layout_adjusted_tip_layout", "tip_container", Role.HOME_LAYOUT_TIP)
         add("indicator_search_layout", "finderContainer", Role.HOME_FINDER)
@@ -155,7 +162,7 @@ internal class GlassLauncherControls(
     }
     private val menuRadiusId = resources.getIdentifier("quick_option_round_corner_radius", "dimen", launcher)
     private val largeFolderRadiusId = resources.getIdentifier("enforced_rounded_corner_max_radius", "dimen", launcher)
-    private val nativeCrop = runCatching { NativeCrop() }.getOrNull()
+    private val nativeCrop = if (edgeSettingsOnly) null else runCatching { NativeCrop() }.getOrNull()
     private var quickOptionType: Class<out ViewGroup>? = null
     private var findLargeFolder: ((View) -> Unit)? = null
     private var tabIndicator: Class<out View>? = null
@@ -164,11 +171,15 @@ internal class GlassLauncherControls(
     private var tips: GlassSamsungTips? = null
 
     init {
+        install("launcher_plates") { hookLauncherPlates() }
+        if (!edgeSettingsOnly) installMainLauncherHooks(context, loader)
+    }
+
+    private fun installMainLauncherHooks(context: Context, loader: ClassLoader) {
         install("quick_options") { hookQuickOptions(loader) }
         install("widget_picker") { hookWidgetListBackground(loader) }
         install("widget_preview_group") { hookWidgetPreviewGroup(loader) }
         install("drawer_profile_indicator") { hookTabIndicator(loader) }
-        install("launcher_plates") { hookLauncherPlates() }
         install("drawer_search_binding") { hookDrawerSearchBinding(loader) }
         install("finder_plates") { hookFinderPlates(loader) }
         install("overflow_menus") { hookOverflowMenus(loader) }
@@ -344,10 +355,10 @@ internal class GlassLauncherControls(
     private fun hookLauncherPlates() {
         val sortLayout = resources.getIdentifier("sort_popup", "layout", launcher)
         val pageActionLayout = resources.getIdentifier("page_action_layout", "layout", launcher)
-        val layouts = setOf("vertical_apps_tab_layout", "applist_tab_layout", "app_search_wrapper", "appscreen",
+        val layouts = if (edgeSettingsOnly) emptySet() else setOf("vertical_apps_tab_layout", "applist_tab_layout", "app_search_wrapper", "appscreen",
             "input_layout", "sort_popup", "page_action_layout")
             .map { resources.getIdentifier(it, "layout", launcher) }.filter { it != 0 }.toSet()
-        check(layouts.isNotEmpty())
+        check(layouts.isNotEmpty() || nativePlates.isNotEmpty())
         val inflate = LayoutInflater::class.java.getMethod(
             "inflate", Int::class.javaPrimitiveType, ViewGroup::class.java, Boolean::class.javaPrimitiveType,
         )

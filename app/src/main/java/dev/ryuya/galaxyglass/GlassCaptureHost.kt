@@ -31,12 +31,31 @@ internal class GlassCaptureHost(private val app: Application, private val loader
             }.getOrNull()
             main.post {
                 runtime.update(config?.getBoolean(GlassTargets.CAPTURE_SETTING) == true,
-                    config?.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH) ?: 0)
+                    config?.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH) ?: 0,
+                    config?.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT) ?: GlassAppearance.DEFAULT_TINT)
             }
         }
     }
 
-    private fun installDialogs(glass: RecordingStartGlass) = runCatching {
+    private fun installDialogs(glass: RecordingStartGlass) {
+        runCatching {
+            ModernHook.aroundMethod(Dialog::class.java.getMethod("show")) { chain ->
+                val result = chain.proceed()
+                val dialog = chain.thisObject as Dialog
+                runCatching {
+                    when (dialog.window?.peekDecorView()?.tag) {
+                        START_DIALOG -> glass.attach(dialog)
+                        TARGET_PICKER -> glass.attach(dialog, captureBackdrop = false)
+                    }
+                }.onFailure { HookEntry.log("Capture dialog glass unavailable: ${it.javaClass.simpleName}") }
+                result
+            }
+        }.onFailure { HookEntry.log("Capture tagged dialog hook unavailable: ${it.javaClass.simpleName}") }
+        runCatching { installRecordingStartHook(glass) }
+            .onFailure { HookEntry.log("Recording start hook unavailable: ${it.javaClass.simpleName}") }
+    }
+
+    private fun installRecordingStartHook(glass: RecordingStartGlass) {
         val controller = DexSymbols.findClass(
             "com.samsung.android.app.smartcapture.screenrecorder.ScreenRecorderController", false, loader)
         val popup = controller.getDeclaredField("mSoundSettingSuggestionPopup").apply { isAccessible = true }
@@ -50,18 +69,7 @@ internal class GlassCaptureHost(private val app: Application, private val loader
             }.onFailure { HookEntry.log("Recording start glass unavailable: ${it.javaClass.simpleName}") }
             result
         }
-        ModernHook.aroundMethod(Dialog::class.java.getMethod("show")) { chain ->
-            val result = chain.proceed()
-            val dialog = chain.thisObject as Dialog
-            runCatching {
-                when (dialog.window?.peekDecorView()?.tag) {
-                    START_DIALOG -> glass.attach(dialog)
-                    TARGET_PICKER -> glass.attach(dialog, captureBackdrop = false)
-                }
-            }.onFailure { HookEntry.log("Capture dialog glass unavailable: ${it.javaClass.simpleName}") }
-            result
-        }
-    }.onFailure { HookEntry.log("Capture dialog hooks unavailable: ${it.javaClass.simpleName}") }
+    }
 
     private companion object {
         const val TARGET_PICKER = "dev.ryuya.galaxyglass.capture_target"
@@ -75,19 +83,28 @@ internal class GlassCaptureRuntime(val context: Context, private val worker: jav
         private set
     var strength = 0
         private set
+    var tint = GlassAppearance.DEFAULT_TINT
+        private set
+    val stockTransparency: Float get() = 1.5f - tint / 100f
+    val faceTint: Float get() = .35f + 1.3f * tint / 100f
     private var reported = false
 
     fun onOptionsChanged(listener: () -> Unit) {
         listeners += listener
     }
 
-    fun update(enabled: Boolean, strength: Int) {
+    fun update(enabled: Boolean, strength: Int, tint: Int) {
         val active = enabled && strength > 0
-        if (this.enabled == active && this.strength == strength) return
+        val nextTint = GlassAppearance.tintPercent(tint)
+        if (this.enabled == active && this.strength == strength && this.tint == nextTint) return
+        val wasActive = this.enabled
         this.enabled = active
         this.strength = strength
-        if (!active) reported = false
-        report(if (active) "READY" else "OFF")
+        this.tint = nextTint
+        if (wasActive != active) {
+            reported = false
+            report(if (active) "READY" else "OFF")
+        }
         listeners.forEach { it() }
     }
 

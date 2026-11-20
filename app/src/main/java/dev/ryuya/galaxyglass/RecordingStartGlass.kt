@@ -77,6 +77,7 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
         private val stockColor: ColorStateList? = stock?.color
         private val stockAlpha = stock?.alpha ?: 255
         private var blurInfo: Any? = null
+        private var blurTone: Int? = null
         private var blurRejected = false
         private var appliedAlpha: Int? = null
         private var styled = false
@@ -128,7 +129,8 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
                     dark -> .89f
                     else -> .92f
                 }
-                val alpha = (stockAlpha * (1f - (1f - opacity) * runtime.strength / 100f)).roundToInt()
+                val reduction = (1f - opacity) * runtime.strength / 100f * runtime.stockTransparency
+                val alpha = (stockAlpha * (1f - reduction)).roundToInt().coerceIn(0, stockAlpha)
                 if (stock != null && appliedAlpha != alpha) {
                     stock.mutate().alpha = alpha
                     appliedAlpha = alpha
@@ -151,12 +153,15 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
             if (secure || blurRejected) return false
             val api = blur ?: return false
             val current = api.current(panel)
-            if (blurInfo != null && current === blurInfo) return true
-            if (current != null || panel.background != null) return false
+            if ((current != null && current !== blurInfo) || panel.background != null) return false
             val base = stockColor?.getColorForState(panel.drawableState, stockColor.defaultColor)
                 ?: if (dark) 0xff222731.toInt() else 0xffedf2f7.toInt()
-            val tone = ColorUtils.setAlphaComponent(base, if (dark) 205 else 217)
+            val alpha = 255 - ((if (dark) 50 else 38) * runtime.stockTransparency).roundToInt()
+            val tone = ColorUtils.setAlphaComponent(base, alpha.coerceIn(0, 255))
+            if (blurInfo != null && current === blurInfo && tone == blurTone) return true
+            if (blurInfo != null) clearBlur()
             blurInfo = api.apply(panel, (23f * density).roundToInt(), corner, tone)
+            blurTone = tone.takeIf { blurInfo != null }
             blurRejected = blurInfo == null
             return blurInfo != null
         }
@@ -164,6 +169,7 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
         private fun clearBlur() {
             val inserted = blurInfo ?: return
             blurInfo = null
+            blurTone = null
             val api = blur ?: return
             if (api.current(panel) === inserted) api.clear(panel)
         }
@@ -285,8 +291,10 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
             val radius = (corner - 1.55f * density).coerceAtLeast(0f)
             paint.style = Paint.Style.FILL
             paint.shader = light
+            paint.alpha = (255 * runtime.faceTint.coerceAtMost(1f)).roundToInt()
             canvas.drawRoundRect(area, radius, radius, paint)
             paint.style = Paint.Style.STROKE
+            paint.alpha = 255
             paint.strokeWidth = .85f * density
             paint.shader = edge
             canvas.drawRoundRect(area, radius, radius, paint)
