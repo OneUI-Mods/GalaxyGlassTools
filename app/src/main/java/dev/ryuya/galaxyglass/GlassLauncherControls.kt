@@ -63,6 +63,7 @@ internal class GlassLauncherControls(
         MULTI_SELECT_ACTION("multi_select_action"), WIDGET_STACK_ADD("widget_stack_add"), LARGE_FOLDER("large_folder"),
         PAGE_EDIT("home_page_edit"), PICKER_SELECTION("folder_picker_selection"), DRAG_GUIDE("drawer_drag_guide"),
         WIDGET_PICKER_SEARCH("widget_picker_search"), FOLDER_TASKBAR_DIALOG("folder_taskbar_dialog"),
+        WIDGET_PREVIEW_GROUP("widget_preview_group"), PAGE_EDIT_ACTION("home_page_edit_action"),
     }
 
     private data class PlateAnchor(val viewId: Int, val role: Role, val parent: Boolean = false)
@@ -70,6 +71,7 @@ internal class GlassLauncherControls(
 
     private val views = WeakHashMap<View, Binding>()
     private val optionScreens = WeakHashMap<ViewGroup, QuickOptionScreen>()
+    private val pageActions = WeakHashMap<ViewGroup, Unit>()
     private val optionAccess = mutableMapOf<Class<*>, QuickOptionAccess>()
     private val optionTitleAccess = mutableMapOf<Class<*>, java.lang.reflect.Method>()
     private val reported = mutableSetOf<Role>()
@@ -79,6 +81,8 @@ internal class GlassLauncherControls(
     private val optionId = id("quickoption_container")
     private val optionTitleId = id("quickoption_title_container")
     private val homeScreenId = id("home_screen")
+    private val pageActionsId = id("page_action_layout")
+    private val widgetPreviewGroupId = id("list_expand")
     private val tabsId = id("workspace_tab_layout")
     private val searchId = id("app_search_wrapper")
     private val searchBackgroundId = id("backgroundContainer")
@@ -110,6 +114,8 @@ internal class GlassLauncherControls(
         add("selected_header_view", null, Role.PICKER_SELECTION)
         add("widget_list_view", "searchViewContainer", Role.WIDGET_PICKER_SEARCH)
         add("widget_list_view", "sesl_search_bar", Role.WIDGET_PICKER_SEARCH)
+        add("list_expand", "list_expand", Role.WIDGET_PREVIEW_GROUP)
+        add("list_expand_container", "list_expand", Role.WIDGET_PREVIEW_GROUP)
         add("widget_search_bar", "search_edit", Role.WIDGET_SEARCH, parent = true)
         add("stacked_widget_edit_container", "stacked_widget_edit_view_pager", Role.WIDGET_STACK_EDITOR)
         add("folder_setting_container", "folder_color_setting_container", Role.FOLDER_STYLE)
@@ -144,6 +150,7 @@ internal class GlassLauncherControls(
     init {
         install("quick_options") { hookQuickOptions(loader) }
         install("widget_picker") { hookWidgetListBackground(loader) }
+        install("widget_preview_group") { hookWidgetPreviewGroup(loader) }
         install("drawer_profile_indicator") { hookTabIndicator(loader) }
         install("launcher_plates") { hookLauncherPlates() }
         install("drawer_search_binding") { hookDrawerSearchBinding(loader) }
@@ -244,6 +251,22 @@ internal class GlassLauncherControls(
         }
     }
 
+    private fun hookWidgetPreviewGroup(loader: ClassLoader) {
+        if (widgetPreviewGroupId == 0) return
+        val container = DexSymbols.findClass(
+            "com.honeyspace.ui.honeypots.widgetlist.presentation.ListExpandContainer", false, loader,
+        )
+        val applyBackground = container.getDeclaredMethod("setListExpandBackground", Boolean::class.javaPrimitiveType)
+        ModernHook.aroundMethod(applyBackground) { chain ->
+            val result = chain.proceed()
+            safely {
+                val group = chain.thisObject as ViewGroup
+                group.findViewById<View>(widgetPreviewGroupId)?.let { refresh(it, Role.WIDGET_PREVIEW_GROUP) }
+            }
+            result
+        }
+    }
+
     private fun spaceBeforeTitleButton(header: LinearLayout, label: TextView): Int {
         var space = 0
         for (index in header.indexOfChild(label) + 1 until header.childCount) {
@@ -304,8 +327,9 @@ internal class GlassLauncherControls(
 
     private fun hookLauncherPlates() {
         val sortLayout = resources.getIdentifier("sort_popup", "layout", launcher)
+        val pageActionLayout = resources.getIdentifier("page_action_layout", "layout", launcher)
         val layouts = setOf("vertical_apps_tab_layout", "applist_tab_layout", "app_search_wrapper", "appscreen",
-            "input_layout", "sort_popup")
+            "input_layout", "sort_popup", "page_action_layout")
             .map { resources.getIdentifier(it, "layout", launcher) }.filter { it != 0 }.toSet()
         check(layouts.isNotEmpty())
         val inflate = LayoutInflater::class.java.getMethod(
@@ -330,6 +354,7 @@ internal class GlassLauncherControls(
                         }
                         layout == sortLayout && sortPlateId != 0 ->
                             view.findViewById<View>(sortPlateId)?.let { watch(it, Role.DRAWER_SORT) }
+                        layout == pageActionLayout && view is ViewGroup -> watchPageActions(view)
                         else -> findDrawerControl(view)
                     }
                 }
@@ -488,12 +513,26 @@ internal class GlassLauncherControls(
     fun find(view: View) {
         if (tabIndicator?.isInstance(view) == true) findProfileIndicator(view)
         findLargeFolder?.invoke(view)
+        if (pageActionsId != 0 && view.id == pageActionsId && view is ViewGroup) watchPageActions(view)
         val popup = quickOptionType
         if (popup != null && (view.id == homeScreenId || view.id == drawerId) && view is ViewGroup) {
             watchOptionScreen(view, popup)
         }
         persistentPlates[view.id]?.let { watch(view, it) }
         findDrawerControl(view)
+    }
+
+    private fun watchPageActions(row: ViewGroup) {
+        if (pageActions.put(row, Unit) != null) return
+        fun bind() = safely {
+            for (index in 0 until row.childCount) {
+                val child = row.getChildAt(index)
+                // Home Up adds its DIY label directly beside Samsung's two image buttons.
+                if (child is LinearLayout || child is TextView) watch(child, Role.PAGE_EDIT_ACTION)
+            }
+        }
+        OneShotPreDrawListener.add(row, ::bind)
+        row.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> bind() }
     }
 
     private fun watchOptionScreen(view: ViewGroup, popupType: Class<out ViewGroup>) {
@@ -676,6 +715,7 @@ internal class GlassLauncherControls(
                 Role.MULTI_SELECT_ACTION -> effect?.update(host, strength, 18, keepFill = true)
                 Role.FINDER_CHIP -> effect?.update(host, strength, 18, boundedPlate = true)
                 Role.DRAWER_SORT -> effect?.update(host, strength, 24, keepFill = true)
+                Role.PAGE_EDIT_ACTION -> effect?.update(host, strength, 24, boundedPlate = true)
                 Role.MORE -> {
                     val maxSize = 88 * host.resources.displayMetrics.density
                     val buttonStrength = if (host.width <= maxSize && host.height <= maxSize) strength else 0

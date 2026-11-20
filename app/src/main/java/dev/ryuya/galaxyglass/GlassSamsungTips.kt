@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.DrawableWrapper
@@ -101,15 +102,9 @@ internal class GlassSamsungTips(
         private val view = WeakReference(view)
         private val panel = WeakReference(panel)
         private val source = WeakReference(source)
-        private val layer = Paint()
-        private val color = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
-        }
+        private val highlight = GlassTipHighlight()
         private val map = Matrix()
         private val panelPosition = IntArray(2)
-        private var gradient: LinearGradient? = null
-        private var height = 0
-        private var dark = false
 
         fun restore(view: ImageView) {
             if (image && view.drawable === this) view.setImageDrawable(stock)
@@ -142,38 +137,54 @@ internal class GlassSamsungTips(
                 super.draw(canvas)
                 return
             }
-            val night = host.resources.configuration.isNightModeActive
-            val shader = shade(region.height, night)
             region.getLocationOnScreen(panelPosition)
             map.setTranslate(panelPosition[0].toFloat(), panelPosition[1].toFloat())
             host.transformMatrixToLocal(map)
-            shader.setLocalMatrix(map)
-            color.shader = shader
-            color.alpha = 255 * level / 100
-            layer.alpha = 255 - 42 * level / 100
-            val save = canvas.saveLayer(bounds.left.toFloat(), bounds.top.toFloat(), bounds.right.toFloat(),
-                bounds.bottom.toFloat(), layer)
-            try {
-                super.draw(canvas)
-                canvas.drawRect(bounds, color)
-            } finally {
-                canvas.restoreToCount(save)
-            }
+            highlight.draw(canvas, stock, bounds, region.height, host.resources.configuration.isNightModeActive, level, map)
             if (!reported) {
                 reported = true
                 onDrawn()
             }
         }
 
-        private fun shade(panelHeight: Int, night: Boolean): LinearGradient {
-            val current = gradient
-            if (current != null && height == panelHeight && dark == night) return current
-            height = panelHeight
-            dark = night
-            val colors = if (night) intArrayOf(0x65f0f7ff, 0x15172838, 0x620a1625)
-                else intArrayOf(0x78ffffff, 0x0df1f7ff, 0x4b91a6c0)
-            return LinearGradient(0f, 0f, 0f, panelHeight.toFloat(), colors, floatArrayOf(0f, .48f, 1f),
-                Shader.TileMode.CLAMP).also { gradient = it }
+    }
+}
+
+/** Tints the native silhouette, including its arrow, with one continuous tooltip highlight. */
+internal class GlassTipHighlight {
+    private val layer = Paint()
+    private val color = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+    }
+    private var gradient: LinearGradient? = null
+    private var height = 0
+    private var dark = false
+
+    fun draw(canvas: Canvas, stock: Drawable, bounds: Rect, panelHeight: Int, night: Boolean, level: Int,
+        panelToPart: Matrix) {
+        val shader = shade(panelHeight, night)
+        shader.setLocalMatrix(panelToPart)
+        color.shader = shader
+        color.alpha = 255 * level / 100
+        layer.alpha = 255 - 42 * level / 100
+        val save = canvas.saveLayer(bounds.left.toFloat(), bounds.top.toFloat(), bounds.right.toFloat(),
+            bounds.bottom.toFloat(), layer)
+        try {
+            stock.draw(canvas)
+            canvas.drawRect(bounds, color)
+        } finally {
+            canvas.restoreToCount(save)
         }
+    }
+
+    private fun shade(panelHeight: Int, night: Boolean): LinearGradient {
+        val current = gradient
+        if (current != null && height == panelHeight && dark == night) return current
+        height = panelHeight
+        dark = night
+        val colors = if (night) intArrayOf(0x65f0f7ff, 0x15172838, 0x620a1625)
+            else intArrayOf(0x78ffffff, 0x0df1f7ff, 0x4b91a6c0)
+        return LinearGradient(0f, 0f, 0f, panelHeight.toFloat(), colors, floatArrayOf(0f, .48f, 1f),
+            Shader.TileMode.CLAMP).also { gradient = it }
     }
 }

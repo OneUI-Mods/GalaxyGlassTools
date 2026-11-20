@@ -604,6 +604,7 @@ internal class GlassSystemSurfaces(
         val EXISTING_PANEL_PLATES = mapOf(
             "status_bar_notification_dnd_status" to "notification_dnd_status_text_icon_container",
             "qs_panel_multi_sim_preffered_slot" to "qs_multi_sim_preffered_slot",
+            "sec_status_bar_notification_shelf" to "notification_shelf_text_area",
         )
         val EXISTING_CHIPS = listOf("ongoing_activity_chip_content", "sec_ongoing_activity_chip_item",
             "samsung_ongoing_call_chip", "samsung_ongoing_cast_chip")

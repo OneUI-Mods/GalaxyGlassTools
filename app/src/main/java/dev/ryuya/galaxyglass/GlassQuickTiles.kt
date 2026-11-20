@@ -32,6 +32,8 @@ internal class GlassQuickTiles(
         GRID(GlassMaterial.Profile.QUICK_GROUP),
         SLIDER(GlassMaterial.Profile.QUICK_SLIDER),
         SIM_BAR(GlassMaterial.Profile.QUICK_GROUP),
+        SIM_POPUP(GlassMaterial.Profile.SYSTEM_SURFACE),
+        HEADER_ACTION(GlassMaterial.Profile.QUICK_CONTROL),
         EDITOR(GlassMaterial.Profile.SYSTEM_SURFACE),
     }
     private data class Clip(val surface: Surface, val nativeShape: Any)
@@ -152,8 +154,114 @@ internal class GlassQuickTiles(
             requireNotNull(draw.invoke(null, emptyModifier, callback))
         }
         installNativeGroupSurfaces(loader, modifier, then, ::overlay)
+        runCatching { installSimPopup(loader, modifier, then, ::overlay) }
+            .onFailure { HookEntry.log("GLASS_QUICK_SIM_POPUP_UNAVAILABLE ${it.javaClass.simpleName}") }
+        runCatching { installHeaderActions(loader, resources, modifier, then, ::overlay) }
+            .onFailure { HookEntry.log("GLASS_QUICK_HEADER_ACTIONS_UNAVAILABLE ${it.javaClass.simpleName}") }
         runCatching { installEditorSurfaces(loader, resources, modifier, then, ::overlay) }
             .onFailure { HookEntry.log("GLASS_QUICK_EDITOR_UNAVAILABLE ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
+    private fun installSimPopup(loader: ClassLoader, modifier: Class<*>, then: Method,
+        overlay: (Surface, Any) -> Any) {
+        fun type(name: String) = DexSymbols.findClass(name, false, loader)
+        val shape = type("androidx.compose.ui.graphics.Shape")
+        val rounded = type("androidx.compose.foundation.shape.RoundedCornerShape")
+        val clip = type("androidx.compose.ui.draw.ClipKt").getMethod("clip", modifier, shape)
+        val fill = type("androidx.compose.foundation.BackgroundKt").getDeclaredMethod("background-bw27NRU",
+            modifier, Long::class.javaPrimitiveType, shape)
+        val rectangle = type("androidx.compose.ui.graphics.RectangleShapeKt").getField("RectangleShape").get(null)
+        val owner = "base.packages.SystemUI.samsung.compose_qs.src.com.android.systemui.samsung.quicksetting.ui.tiles"
+        val renderer = type("$owner.MultiSIMPreferredPopupKt").declaredMethods.single {
+            it.name == "MultiSIMPreferredPopup" && it.parameterTypes.firstOrNull() == modifier
+        }
+        class PopupPlate {
+            var modifier: Any? = null
+            var shape: Any? = null
+        }
+        val popup = ThreadLocal<PopupPlate>()
+        val handles = mutableListOf<ModernHook.Handle>()
+        try {
+            handles += ModernHook.aroundMethod(clip) { chain ->
+                val result = chain.proceed()
+                val plate = popup.get()
+                if (plate != null && rounded.isInstance(chain.args[1])) {
+                    plate.modifier = result
+                    plate.shape = chain.args[1]
+                }
+                result
+            }
+            handles += ModernHook.aroundMethod(fill) { chain ->
+                val plate = popup.get()
+                val roundedShape = plate?.shape
+                if (roundedShape == null || chain.args[0] !== plate.modifier || chain.args[2] !== rectangle) {
+                    return@aroundMethod chain.proceed()
+                }
+                popup.remove()
+                val stock = chain.args[1] as Long
+                if (stock and 0xffffffffL != 0L) return@aroundMethod chain.proceed()
+                val args = chain.args.toTypedArray()
+                val alpha = ((stock ushr 56) * (1f - .60f * level() / 100f)).toInt()
+                args[1] = (stock and 0x00ffffffffffffffL) or (alpha.toLong() shl 56)
+                then.invoke(chain.proceed(args), overlay(Surface.SIM_POPUP, roundedShape))
+            }
+            ModernHook.deoptimize(renderer)
+            handles += ModernHook.aroundMethod(renderer) { chain ->
+                if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
+                val previous = popup.get()
+                popup.set(PopupPlate())
+                try {
+                    chain.proceed()
+                } finally {
+                    if (previous == null) popup.remove() else popup.set(previous)
+                }
+            }
+        } catch (error: Throwable) {
+            handles.asReversed().forEach(ModernHook.Handle::unhook)
+            throw error
+        }
+    }
+
+    private fun installHeaderActions(loader: ClassLoader, resources: Resources, modifier: Class<*>, then: Method,
+        overlay: (Surface, Any) -> Any) {
+        fun type(name: String) = DexSymbols.findClass(name, false, loader)
+        val icons = listOf("tw_ic_ab_edit_mtrl", "tw_ic_ab_power_mtrl", "tw_ic_ab_setting_mtrl").mapNotNull {
+            resources.getIdentifier(it, "drawable", "com.android.systemui").takeIf { id -> id != 0 }
+        }.toSet()
+        check(icons.isNotEmpty())
+        val circle = requireNotNull(type("androidx.compose.foundation.shape.RoundedCornerShapeKt")
+            .getField("CircleShape").get(null))
+        val size = type("androidx.compose.foundation.layout.SizeKt").getDeclaredMethod("size-VpY3zN4",
+            modifier, Float::class.javaPrimitiveType, Float::class.javaPrimitiveType)
+        // This lambda creates the button's touch-sized Box inside Samsung's tooltip host.
+        val owner = type("com.android.systemui.samsung.quicksetting.ui.panel.SecQuickSettingHeaderKt\$\$ExternalSyntheticLambda14")
+        val renderer = owner.getDeclaredMethod("invoke", Any::class.java, Any::class.java)
+        val icon = owner.getDeclaredField("f\$9").apply { isAccessible = true }
+        val headerButton = ThreadLocal<Boolean>()
+        val hook = ModernHook.aroundMethod(size) { chain ->
+            val result = chain.proceed()
+            if (headerButton.get() != true) return@aroundMethod result
+            headerButton.remove()
+            then.invoke(result, overlay(Surface.HEADER_ACTION, circle))
+        }
+        try {
+            ModernHook.deoptimize(renderer)
+            ModernHook.aroundMethod(renderer) { chain ->
+                if (level() <= 0 || !unlocked() || drawingUnavailable || icon.getInt(chain.thisObject) !in icons) {
+                    return@aroundMethod chain.proceed()
+                }
+                val previous = headerButton.get()
+                headerButton.set(true)
+                try {
+                    chain.proceed()
+                } finally {
+                    if (previous == null) headerButton.remove() else headerButton.set(previous)
+                }
+            }
+        } catch (error: Throwable) {
+            hook.unhook()
+            throw error
+        }
     }
 
     private fun installEditorSurfaces(

@@ -8,15 +8,17 @@ The layout and resource inventory comes from the installed SM-S948Q BZI9 SystemU
 
 | Area | Plates |
 | --- | --- |
-| Quick Panel details | Samsung detail cards, the SIM selection bar and popup, quick controls, the device-management footer and user switcher dialogs. Internet, Bluetooth, hearing devices and their ambient-volume expand control, audio sharing, external display, font size, Do Not Disturb and airplane mode dialogs. |
+| Quick Panel details | Samsung detail cards, the SIM selection bar and its separate Compose popup, quick controls, the header edit, power and settings buttons, the device-management footer and user switcher dialogs. Internet, Bluetooth, hearing devices and their ambient-volume expand control, audio sharing, external display, font size, Do Not Disturb and airplane mode dialogs. |
 | Media and privacy | Full media cards, output controls, media option buttons, carousel settings and track popups, privacy dialogs and ongoing activity chips. |
-| Panel controls | Notification channel controls, suggested actions and replies, snooze, the Do Not Disturb banner, notification group buttons, the notification shelf and footer actions. Quick Panel tile editing areas and their buttons and popup options. |
+| Panel controls | Notification channel controls, suggested actions and replies, snooze, the Do Not Disturb banner, notification group buttons, the notification shelf and footer actions including Samsung's Notification settings and Clear buttons. Quick Panel tile editing areas and their buttons and popup options. |
 | Overlay cards | Clipboard preview frame and editor controls, AOSP screenshot action shelf, status and connected display chips, text toasts, gesture hints and accessibility tooltips. |
 | Window controls | PiP menu controls, bubble flyouts, title bars, menus and overflow, app pinning confirmation, floating-window trays and preview frames, window layout and resize menus, Samsung Multi Window, Flex Mode and DeX menus, letterbox prompts and the user switcher chip. |
 | System dialogs | Samsung and AOSP power menu plates, charging dialogs, screen recording options, screen sharing prompt, foreground app manager, device controls and their individual cards, and extra-dim prompts. |
 | Accessibility and lock screen | Floating shortcuts, magnification settings and the two lock-screen shortcut buttons. |
 
 One UI Home uses the same surface treatment on the task menu and overflow in Recents, Home and DeX context menus, multi-select actions, the widget picker and stack editor, the folder colour settings card and preview, the selected-apps header in the folder picker, the bottom page-edit panel, the Finder shortcut, overlay app search and the taskbar. Large folders use the native background controller to locate the folder plate, so the glass follows resizing while the icon grid stays in its native draw layer. Glass surface diagnostics lists the launcher controls alongside SystemUI and distinguishes discovery from drawing.
+
+The widget picker styles the expanded preview group's background and leaves the widget previews themselves intact. The Home page controls use separate glass plates for setting the home page, deleting a page and opening DIY Home.
 
 Layout variants were inspected in the BZI9 SystemUI, launcher and Smart Capture APKs. SystemUI and launcher resolve their own layout and view IDs. A one-shot pre-draw applies the material once the native background and bounds are ready for the first frame. Dialog fallback checks both Android's and Samsung's content panel IDs. The floating-window fallback follows the dialog's shape. The Quick Panel editor menu, Quick Panel tooltip, power overflow and full-screen user switcher menu are bound when their own popup windows are shown. The editor menu keeps Samsung's per-view blur on the list and draws the glass edge around the whole menu.
 
@@ -27,6 +29,8 @@ The module keeps the original drawable instance for native plates. When its outl
 The additional surfaces do not start a capture. Media cards and groups in the notification panel reuse the existing shade source when it is available. The lens is drawn before the controls, with lighter blending over album artwork. Secure windows and authentication prompts keep their stock rendering, and the lock-screen scope covers notification cards and shortcut chrome while the screen is interactive. Reduce transparency disables this group and restores the previous drawable state. The SystemUI screenshot, foreground services and multi-window helper processes each have an independent crash guard. Galaxy Glass Tools also styles Samsung Capture's own screenshot and recording toolbars. Screenshot image previews, camera content, PiP video and app content hosted in bubbles are outside the glass plates.
 
 The BZI9 resource inventory also covers the drawer drag guides, device-to-device control cards, the bubble drop target, the screen saver media button, the capture brush settings panel and the text extraction help bubble.
+
+Samsung Capture's scrolling screenshot, pinning and Smart Select guide bubbles use the native two-part silhouettes as the mask for a continuous highlight. The original guide text and arrows retain their positions.
 
 The bevel combines a wide highlight, a shaded inner edge and a soft reflection across the face. It follows the native contour and uses different lighting in light and dark mode. The power-menu version uses a narrower bevel inside each icon's circle and keeps Samsung's action colors and symbols visible.
 

@@ -3,6 +3,7 @@ package dev.ryuya.galaxyglass
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.PixelFormat
@@ -10,6 +11,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.DrawableWrapper
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.database.ContentObserver
@@ -23,6 +25,7 @@ import androidx.core.view.OneShotPreDrawListener
 import dev.ryuya.galaxyglass.hook.HookCallback
 import dev.ryuya.galaxyglass.hook.Hooks
 import dev.ryuya.galaxyglass.compat.DexSymbols
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.min
 
@@ -31,6 +34,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private val main = Handler(Looper.getMainLooper())
     private val plates = WeakHashMap<View, Plate>()
     private val screenshotPlates = WeakHashMap<View, Plate>()
+    private val guideParts = WeakHashMap<View, GuideBinding>()
     private val reported = mutableSetOf<String>()
     private var reduceTransparency = readTransparencySetting()
     private val targets = buildMap {
@@ -44,6 +48,10 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
                 if (id == 0) null else Target(id, anchor.cornerDp, anchor.ancestors)
             }
             if (anchors.isNotEmpty()) put(layout, Targets(name, anchors))
+        }
+        for (name in GUIDES) {
+            val layout = resources.getIdentifier(name, "layout", packageName)
+            if (layout != 0) put(layout, Targets(name, emptyList()))
         }
     }
 
@@ -77,6 +85,10 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
                 } else listOf(inflated)
                 fun bindRoots() {
                     for (root in roots) {
+                        if (spec.name in GUIDES) {
+                            bindGuide(root, spec.name)
+                            continue
+                        }
                         for (anchor in spec.anchors) {
                             var view = if (anchor.id == null) root else root.findViewById<View>(anchor.id)
                             repeat(anchor.ancestors) { view = view?.parent as? View }
@@ -120,6 +132,79 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private fun refresh() {
         plates.entries.toList().forEach { (view, effect) -> update(view, effect) }
         screenshotPlates.keys.toList().forEach(View::invalidate)
+        guideParts.entries.toList().forEach { (view, guide) -> guide.refresh(view) }
+    }
+
+    private fun bindGuide(root: View, layout: String) {
+        val panel = (root as? ViewGroup)?.getChildAt(0) as? ViewGroup ?: return
+        if (panel.childCount != 2 || (0 until panel.childCount).any { panel.getChildAt(it).background == null }) return
+        for (index in 0 until panel.childCount) {
+            val view = panel.getChildAt(index)
+            if (view in guideParts) continue
+            val guide = GuideBinding(panel, layout)
+            guideParts[view] = guide
+            view.addOnAttachStateChangeListener(guide)
+            if (view.isAttachedToWindow) guide.onViewAttachedToWindow(view)
+        }
+    }
+
+    private inner class GuideBinding(panel: View, private val layout: String) : View.OnAttachStateChangeListener {
+        private val panel = WeakReference(panel)
+        private var part: GuidePart? = null
+
+        override fun onViewAttachedToWindow(view: View) {
+            OneShotPreDrawListener.add(view) { refresh(view) }
+        }
+
+        override fun onViewDetachedFromWindow(view: View) = restore(view)
+
+        fun refresh(view: View) {
+            val region = panel.get()
+            if (!enabled() || !view.isAttachedToWindow || region == null) {
+                restore(view)
+                return
+            }
+            val stock = view.background ?: return
+            if (part === stock) {
+                view.invalidate()
+                return
+            }
+            val wrapper = GuidePart(view, region, stock) { didDraw(layout) }
+            part = wrapper
+            view.background = wrapper
+            stock.callback = wrapper
+        }
+
+        private fun restore(view: View) {
+            val wrapper = part ?: return
+            if (view.background === wrapper) view.background = wrapper.stock
+            part = null
+        }
+    }
+
+    private inner class GuidePart(view: View, panel: View, val stock: Drawable, private val onDrawn: () -> Unit) :
+        DrawableWrapper(stock) {
+        private val view = WeakReference(view)
+        private val panel = WeakReference(panel)
+        private val highlight = GlassTipHighlight()
+        private val position = IntArray(2)
+        private val matrix = Matrix()
+
+        override fun draw(canvas: Canvas) {
+            val host = view.get()
+            val region = panel.get()
+            if (!enabled() || host == null || region == null || region.height <= 0 ||
+                bounds.isEmpty || !canvas.isHardwareAccelerated) {
+                super.draw(canvas)
+                return
+            }
+            region.getLocationOnScreen(position)
+            matrix.setTranslate(position[0].toFloat(), position[1].toFloat())
+            host.transformMatrixToLocal(matrix)
+            highlight.draw(canvas, stock, bounds, region.height, host.resources.configuration.isNightModeActive,
+                runtime.strength, matrix)
+            onDrawn()
+        }
     }
 
     private fun enabled(): Boolean {
@@ -158,7 +243,9 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private fun readTransparencySetting(): Boolean =
         Settings.System.getInt(runtime.context.contentResolver, REDUCE_TRANSPARENCY, 0) != 0
 
-    private fun createPlate(layout: String, cornerDp: Int?) = Plate(cornerDp, { runtime.strength }) {
+    private fun createPlate(layout: String, cornerDp: Int?) = Plate(cornerDp, { runtime.strength }) { didDraw(layout) }
+
+    private fun didDraw(layout: String) {
         runtime.didDraw()
         if (reported.add(layout)) Hooks.log("CAPTURE_TOOLBAR_GLASS_DRAWN $layout")
     }
@@ -248,6 +335,8 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     companion object {
         private const val REDUCE_TRANSPARENCY = "accessibility_reduce_transparency"
         private const val SCREENSHOT_LAYOUT = "scroll_capture_action_button_stand_alone"
+        private val GUIDES = setOf("scroll_capture_guide_pop_up_layout", "pin_guide_pop_up_layout",
+            "smart_select_guide_pop_up_layout")
         private fun anchors(vararg ids: String, cornerDp: Int? = null) = ids.map { Anchor(it, cornerDp) }
 
         private val imageActions = anchors("capture_ai_edit_button", "capture_ai_pin_button",

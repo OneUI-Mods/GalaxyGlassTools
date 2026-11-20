@@ -140,6 +140,7 @@ internal object GlassSystemCatalog {
         Layout("sec_notification_snooze", listOf(Anchor("header", 22))),
         Layout("notification_2025_footer", listOf(Anchor("settings_button", 24), Anchor("dismiss_text", 24),
             Anchor("history_button", 24))),
+        roundedPlate("sec_status_bar_notification_shelf", 24, "noti_setting", "clear_all"),
         Layout("status_bar_notification_dnd_status", listOf(shadePlate("notification_dnd_status_text_icon_container", 22))),
         roundedPlate("status_bar_notification_section_header", 18, "btn_expand", "btn_clear_all"),
         root("shelf_action_chip", 24),
