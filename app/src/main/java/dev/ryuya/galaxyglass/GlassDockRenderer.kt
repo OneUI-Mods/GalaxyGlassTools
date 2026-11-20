@@ -110,7 +110,8 @@ internal class GlassDockRenderer : AutoCloseable {
             source.getTransformMatrix(transform)
             hasFrame = true
         }
-        if (!hasFrame) return false
+        // A texture callback may have presented the queued style before its own callback runs.
+        if (!hasFrame || (!newFrame && appliedShape === shape)) return false
         Trace.beginSection(if (newFrame) "GlassDockStream.frame" else "GlassDockStream.style")
         try {
             glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture)
@@ -228,10 +229,6 @@ internal class GlassDockRenderer : AutoCloseable {
                     gl_FragColor = vec4(0.0);
                     return;
                 }
-                if (dot(outward, outward) < 0.0001) {
-                    outward = corner.x > corner.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-                }
-                vec2 normal = normalize(outward) * sign(local);
                 float depth = max(0.0, -distanceToEdge);
                 float density = material.y;
                 float strength = material.z;
@@ -242,6 +239,10 @@ internal class GlassDockRenderer : AutoCloseable {
                     gl_FragColor = vec4(0.0);
                     return;
                 }
+                if (dot(outward, outward) < 0.0001) {
+                    outward = corner.x > corner.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+                }
+                vec2 normal = normalize(outward) * sign(local);
                 float inner = circularBevel(depth, innerHeight) * 19.0 * density * strength;
                 float outer = circularBevel(depth, outerHeight) * 34.0 * density * strength;
                 vec2 face = p + normal * inner;
