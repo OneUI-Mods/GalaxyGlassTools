@@ -16,6 +16,7 @@ internal class GlassQuickTiles(
     resources: Resources,
     private val level: () -> Int,
     private val editLevel: () -> Int,
+    private val volumeLevel: () -> Int,
     private val dark: () -> Boolean,
     private val unlocked: () -> Boolean,
     private val pointer: () -> GlassPointer?,
@@ -24,8 +25,8 @@ internal class GlassQuickTiles(
     private val backdrop: () -> GlassPanelBackdrop?,
     private val onDrawn: () -> Unit,
     private val onEditorDrawn: () -> Unit,
-    private val onFailed: (Exception) -> Unit,
-    private val onEditorStage: (GlassSurfaceStage) -> Unit,
+    private val onVolumeDrawn: () -> Unit,
+    private val onSurface: (String, GlassSurfaceStage) -> Unit,
 ) {
     private enum class Surface(val profile: GlassMaterial.Profile) {
         CARD(GlassMaterial.Profile.QUICK_CONTROL),
@@ -37,6 +38,17 @@ internal class GlassQuickTiles(
         DETAIL_PANEL(GlassMaterial.Profile.SYSTEM_SURFACE),
         HEADER_TOOLTIP(GlassMaterial.Profile.SYSTEM_SURFACE),
         SECURITY_FOOTER(GlassMaterial.Profile.QUICK_CONTROL),
+        MEDIA(GlassMaterial.Profile.QUICK_GROUP),
+        EMPTY_MEDIA(GlassMaterial.Profile.QUICK_GROUP),
+        CONTROL_BAR(GlassMaterial.Profile.QUICK_GROUP),
+        PANEL_SETTINGS(GlassMaterial.Profile.SYSTEM_SURFACE),
+        PANEL_SUBMENU(GlassMaterial.Profile.SYSTEM_SURFACE),
+        BRIGHTNESS_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
+        SOUNDCRAFT_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
+        PRIVACY_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
+        DND_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
+        VOLUME_OPTIONS(GlassMaterial.Profile.SYSTEM_SURFACE),
+        VOLUME_POPUP(GlassMaterial.Profile.SYSTEM_SURFACE),
         EDITOR(GlassMaterial.Profile.SYSTEM_SURFACE),
     }
     private data class Clip(val surface: Surface, val nativeShape: Any)
@@ -49,7 +61,22 @@ internal class GlassQuickTiles(
         val screenY: Float,
     )
 
-    private var drawingUnavailable = false
+    private val failedSurfaces = mutableSetOf<Surface>()
+
+    private fun strength(surface: Surface): Int {
+        if (!unlocked() || surface in failedSurfaces) return 0
+        return when (surface) {
+            Surface.EDITOR, Surface.PANEL_SETTINGS, Surface.PANEL_SUBMENU -> editLevel()
+            Surface.VOLUME_OPTIONS, Surface.VOLUME_POPUP -> volumeLevel()
+            else -> level()
+        }
+    }
+
+    private fun disable(surface: Surface, error: Exception) {
+        if (failedSurfaces.add(surface)) {
+            HookEntry.log("GLASS_QUICK_DRAW_UNAVAILABLE ${surface.name.lowercase()} ${error.javaClass.simpleName}")
+        }
+    }
     private val drawnSurfaces = mutableSetOf<Surface>()
     private val refractedSurfaces = mutableSetOf<Surface>()
     private val drawNodes = WeakHashMap<Any, Unit>()
@@ -110,7 +137,6 @@ internal class GlassQuickTiles(
                 val canvas = nativeCanvas.get(getCanvas.invoke(getContext.invoke(nativeScope))) as Canvas
                 if (!canvas.isHardwareAccelerated) return null
                 val node = drawNode?.get(nativeScope)
-                if (invalidateDraw != null && node != null) drawNodes[node] = Unit
                 val touch = pointer()
                 val position = node?.let { runCatching { locate?.invoke(it) }.getOrNull() }
                 val screenX = position?.let { Float.fromBits((it ushr 32).toInt()) } ?: Float.NaN
@@ -125,26 +151,29 @@ internal class GlassQuickTiles(
                 when (called.name) {
                     invoke.name -> {
                         val nativeScope = requireNotNull(args?.firstOrNull())
-                        val strength = if (surface == Surface.EDITOR) editLevel() else level()
+                        if (invalidateDraw != null) drawNode.get(nativeScope)?.let { drawNodes[it] = Unit }
+                        val strength = strength(surface)
                         val mode = dark()
-                        val frame = if (strength > 0 && unlocked() && !drawingUnavailable) {
+                        val frame = if (strength > 0) {
                             try { frame(nativeScope) } catch (error: Exception) {
-                                drawingUnavailable = true
-                                onFailed(error)
+                                disable(surface, error)
                                 null
                             }
                         } else null
-                        if (frame != null) {
-                            drawFrame(frame, strength, mode, surface, rim = false)
-                        }
+                        if (frame != null) drawFrame(frame, strength, mode, surface, rim = false)
                         drawContent.invoke(nativeScope)
-                        if (frame != null) {
+                        if (frame != null && surface !in failedSurfaces) {
                             drawFrame(frame, strength, mode, surface, rim = true)
-                            if (drawnSurfaces.add(surface)) {
+                            if (surface !in failedSurfaces && drawnSurfaces.add(surface)) {
                                 HookEntry.log("GLASS_QUICK_SURFACE ${surface.name.lowercase()}")
-                                if (surface == Surface.EDITOR) onEditorStage(GlassSurfaceStage.DRAWN)
+                                report(surface, GlassSurfaceStage.DRAWN)
                             }
-                            if (surface == Surface.EDITOR) onEditorDrawn() else onDrawn()
+                            if (surface !in failedSurfaces) {
+                                if (surface == Surface.EDITOR || surface == Surface.PANEL_SETTINGS ||
+                                    surface == Surface.PANEL_SUBMENU) onEditorDrawn()
+                                else if (surface == Surface.VOLUME_OPTIONS || surface == Surface.VOLUME_POPUP) onVolumeDrawn()
+                                else onDrawn()
+                            }
                         }
                         unit
                     }
@@ -156,158 +185,246 @@ internal class GlassQuickTiles(
             }
             requireNotNull(draw.invoke(null, emptyModifier, callback))
         }
-        installNativeGroupSurfaces(loader, modifier, then, ::overlay)
-        runCatching { installSimPopup(loader, modifier, then, ::overlay) }
-            .onFailure { HookEntry.log("GLASS_QUICK_SIM_POPUP_UNAVAILABLE ${it.javaClass.simpleName}") }
+        val drawingSurface = ThreadLocal<Surface>()
+        val masks = mutableMapOf<Surface, Any>()
+        fun mask(surface: Surface): Any = masks.getOrPut(surface) {
+            val callback = Proxy.newProxyInstance(function.classLoader, arrayOf(function)) { proxy, called, args ->
+                when (called.name) {
+                    invoke.name -> {
+                        val nativeScope = requireNotNull(args?.firstOrNull())
+                        val previous = drawingSurface.get()
+                        if (strength(surface) > 0) drawingSurface.set(surface)
+                        try {
+                            drawContent.invoke(nativeScope)
+                        } finally {
+                            if (previous == null) drawingSurface.remove() else drawingSurface.set(previous)
+                        }
+                        unit
+                    }
+                    "equals" -> proxy === args?.firstOrNull()
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "toString" -> "One UI glass background tint ${surface.name.lowercase()}"
+                    else -> null
+                }
+            }
+            requireNotNull(draw.invoke(null, emptyModifier, callback))
+        }
+
+        installNativePlates(loader, modifier, then, drawingSurface, ::mask, ::overlay)
         runCatching { installHeaderActions(loader, resources, modifier, then, ::overlay) }
             .onFailure { HookEntry.log("GLASS_QUICK_HEADER_ACTIONS_UNAVAILABLE ${it.javaClass.simpleName}") }
-        runCatching { installDetailAndTooltip(loader, modifier, then, ::overlay) }
-            .onFailure { HookEntry.log("GLASS_QUICK_DETAIL_BACKGROUND_UNAVAILABLE ${it.javaClass.simpleName}") }
-        runCatching { installSecurityFooter(loader, modifier, then, ::overlay) }
-            .onFailure { HookEntry.log("GLASS_QUICK_SECURITY_FOOTER_UNAVAILABLE ${it.javaClass.simpleName}") }
-        runCatching { installEditorSurfaces(loader, resources, modifier, then, ::overlay) }
-            .onFailure { HookEntry.log("GLASS_QUICK_EDITOR_UNAVAILABLE ${it.javaClass.simpleName}: ${it.message}") }
+        runCatching { installEditorButtons(loader, resources, modifier, then, ::overlay) }
+            .onFailure { HookEntry.log("GLASS_QUICK_EDITOR_BUTTONS_UNAVAILABLE ${it.javaClass.simpleName}") }
     }
 
-    private fun installDetailAndTooltip(loader: ClassLoader, modifier: Class<*>, then: Method,
-        overlay: (Surface, Any) -> Any) {
+    private enum class PlateMode { CLIP, FILL, CLIPPED_FILL, BOX, ROW, SUBMENU }
+    private data class Renderer(
+        val surface: Surface,
+        val owner: String,
+        val method: String,
+        val mode: PlateMode,
+        val parameters: Int? = null,
+        val row: Int = 1,
+    )
+
+    private class RenderPass(val renderer: Renderer) {
+        var clipModifier: Any? = null
+        var nativeShape: Any? = null
+        var boxShape: Any? = null
+        var rows = 0
+        var bound = false
+    }
+
+    private fun installNativePlates(
+        loader: ClassLoader, modifier: Class<*>, then: Method,
+        drawingSurface: ThreadLocal<Surface>, mask: (Surface) -> Any, overlay: (Surface, Any) -> Any,
+    ) {
         fun type(name: String) = DexSymbols.findClass(name, false, loader)
         val shape = type("androidx.compose.ui.graphics.Shape")
         val rounded = type("androidx.compose.foundation.shape.RoundedCornerShape")
-        val fill = type("androidx.compose.foundation.BackgroundKt").getDeclaredMethod("background-bw27NRU",
-            modifier, Long::class.javaPrimitiveType, shape)
-        val active = ThreadLocal<Surface>()
-        val handles = mutableListOf<ModernHook.Handle>()
-        try {
-            handles += ModernHook.aroundMethod(fill) { chain ->
-                val surface = active.get() ?: return@aroundMethod chain.proceed()
-                val nativeShape = chain.args[2] ?: return@aroundMethod chain.proceed()
-                if (!rounded.isInstance(nativeShape)) return@aroundMethod chain.proceed()
-                val stock = chain.args[1] as Long
-                if (stock and 0xffffffffL != 0L || stock ushr 56 == 0L) return@aroundMethod chain.proceed()
-                active.remove()
-                val args = chain.args.toTypedArray()
-                val alpha = ((stock ushr 56) * (1f - .55f * level() / 100f)).toInt()
-                args[1] = (stock and 0x00ffffffffffffffL) or (alpha.toLong() shl 56)
-                then.invoke(chain.proceed(args), overlay(surface, nativeShape))
-            }
-            val detailOwner = type("com.android.systemui.samsung.quicksetting.ui.details.PopupDetailSceneKt")
-            val detail = detailOwner.declaredMethods.single {
-                it.name == "DetailBG-J5j9r9c" && it.parameterTypes.getOrNull(1) == modifier
-            }
-            handles += scopeRenderer(detail, Surface.DETAIL_PANEL, active)
-            HookEntry.log("GLASS_QUICK_DETAIL_BACKGROUND_READY")
-            runCatching {
-                // The Quick Panel supplies a PlainTooltip with its own rounded shape to SESL's popup.
-                // Prevent compiled Surface callers from inlining past the background hook.
-                val materialSurface = type("androidx.compose.material3.SurfaceKt")
-                ModernHook.deoptimize(materialSurface.declaredMethods.single { it.name == "surface-XO-JAsU" })
-                val surfaceContent = type("androidx.compose.material3.SurfaceKt\$\$ExternalSyntheticLambda0")
-                ModernHook.deoptimize(surfaceContent.getDeclaredMethod("invoke", Any::class.java, Any::class.java))
-                val headerTooltip = type("com.android.systemui.samsung.quicksetting.ui.panel.SecQuickSettingHeaderKt\$\$ExternalSyntheticLambda5")
-                    .getDeclaredMethod("invoke", Any::class.java, Any::class.java, Any::class.java)
-                handles += scopeRenderer(headerTooltip, Surface.HEADER_TOOLTIP, active)
-                HookEntry.log("GLASS_QUICK_TOOLTIP_BACKGROUND_READY")
-            }.onFailure { HookEntry.log("GLASS_QUICK_TOOLTIP_BACKGROUND_UNAVAILABLE ${it.javaClass.simpleName}") }
-        } catch (error: Throwable) {
-            handles.asReversed().forEach(ModernHook.Handle::unhook)
-            throw error
-        }
-    }
-
-    private fun installSecurityFooter(loader: ClassLoader, modifier: Class<*>, then: Method,
-        overlay: (Surface, Any) -> Any) {
-        fun type(name: String) = DexSymbols.findClass(name, false, loader)
-        val owner = type("com.android.systemui.samsung.quicksetting.ui.banner.SecurityFooterKt\$\$ExternalSyntheticLambda0")
-        val footer = owner.getDeclaredMethod("invoke", Any::class.java, Any::class.java, Any::class.java)
-        val fillWidth = type("androidx.compose.foundation.layout.SizeKt").getDeclaredMethod("fillMaxWidth\$default",
-            modifier, Float::class.javaPrimitiveType, Int::class.javaPrimitiveType, Any::class.java)
-        val bodyShape = requireNotNull(type("androidx.compose.foundation.shape.RoundedCornerShapeKt")
-            .getDeclaredMethod("RoundedCornerShape-0680j_4", Float::class.javaPrimitiveType).invoke(null, 18f))
-        val active = ThreadLocal<Surface>()
-        val hook = ModernHook.aroundMethod(fillWidth) { chain ->
-            val result = chain.proceed()
-            if (active.get() != Surface.SECURITY_FOOTER) return@aroundMethod result
-            active.remove()
-            // This call sizes the text-and-icon row inside the footer's deferred content.
-            then.invoke(result, overlay(Surface.SECURITY_FOOTER, bodyShape))
-        }
-        try {
-            scopeRenderer(footer, Surface.SECURITY_FOOTER, active)
-            HookEntry.log("GLASS_QUICK_SECURITY_FOOTER_READY")
-        } catch (error: Throwable) {
-            hook.unhook()
-            throw error
-        }
-    }
-
-    private fun scopeRenderer(renderer: Method, surface: Surface, active: ThreadLocal<Surface>): ModernHook.Handle {
-        ModernHook.deoptimize(renderer)
-        return ModernHook.aroundMethod(renderer) { chain ->
-            if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
-            val previous = active.get()
-            active.set(surface)
-            try {
-                chain.proceed()
-            } finally {
-                if (previous == null) active.remove() else active.set(previous)
-            }
-        }
-    }
-
-    private fun installSimPopup(loader: ClassLoader, modifier: Class<*>, then: Method,
-        overlay: (Surface, Any) -> Any) {
-        fun type(name: String) = DexSymbols.findClass(name, false, loader)
-        val shape = type("androidx.compose.ui.graphics.Shape")
-        val rounded = type("androidx.compose.foundation.shape.RoundedCornerShape")
+        val roundedShape = type("androidx.compose.foundation.shape.RoundedCornerShapeKt")
+            .getDeclaredMethod("RoundedCornerShape-0680j_4", Float::class.javaPrimitiveType)
+        val rowShape = requireNotNull(roundedShape.invoke(null, 18f))
+        val rectangle = type("androidx.compose.ui.graphics.RectangleShapeKt").getField("RectangleShape").get(null)
         val clip = type("androidx.compose.ui.draw.ClipKt").getMethod("clip", modifier, shape)
         val fill = type("androidx.compose.foundation.BackgroundKt").getDeclaredMethod("background-bw27NRU",
             modifier, Long::class.javaPrimitiveType, shape)
-        val rectangle = type("androidx.compose.ui.graphics.RectangleShapeKt").getField("RectangleShape").get(null)
-        val owner = "base.packages.SystemUI.samsung.compose_qs.src.com.android.systemui.samsung.quicksetting.ui.tiles"
-        val renderer = type("$owner.MultiSIMPreferredPopupKt").declaredMethods.single {
-            it.name == "MultiSIMPreferredPopup" && it.parameterTypes.firstOrNull() == modifier
+        val fillWidth = type("androidx.compose.foundation.layout.SizeKt").getDeclaredMethod("fillMaxWidth\$default",
+            modifier, Float::class.javaPrimitiveType, Int::class.javaPrimitiveType, Any::class.java)
+        val box = type("com.android.systemui.samsung.quicksetting.ui.common.uielement.BoxWithOutlineKt").declaredMethods.single {
+            it.name == "BoxWithOutline-8QY48No" && it.parameterCount == 10 && it.parameterTypes[0] == modifier &&
+                it.parameterTypes[5] == rounded
         }
-        class PopupPlate {
-            var modifier: Any? = null
-            var shape: Any? = null
+        val animatedVisibility = type("androidx.compose.animation.AnimatedVisibilityKt").declaredMethods.single {
+            it.name == "AnimatedVisibility" && it.parameterCount == 9 && it.parameterTypes[0] == Boolean::class.javaPrimitiveType
+                && it.parameterTypes[1] == modifier
         }
-        val popup = ThreadLocal<PopupPlate>()
+        val background = type("androidx.compose.foundation.BackgroundNode")
+        val backgroundDraw = background.getDeclaredMethod("draw", type("androidx.compose.ui.node.LayoutNodeDrawScope"))
+        val color = background.getField("color")
+        val active = ThreadLocal<RenderPass>()
         val handles = mutableListOf<ModernHook.Handle>()
+
         try {
+            handles += ModernHook.aroundMethod(backgroundDraw) { chain ->
+                val surface = drawingSurface.get() ?: return@aroundMethod chain.proceed()
+                val node = chain.thisObject
+                val stock = color.getLong(node)
+                val level = strength(surface)
+                drawingSurface.remove()
+                try {
+                    if (level > 0 && stock and 0xffffffffL == 0L) {
+                        val reduction = when (surface) {
+                            Surface.CARD, Surface.SIM_BAR, Surface.EMPTY_MEDIA, Surface.CONTROL_BAR -> .70f
+                            Surface.EDITOR, Surface.PANEL_SETTINGS, Surface.PANEL_SUBMENU -> .45f
+                            else -> .55f
+                        }
+                        val alpha = ((stock ushr 56) * (1f - reduction * level / 100f)).toLong()
+                        color.setLong(node, stock and 0x00ffffffffffffffL or (alpha shl 56))
+                    }
+                    chain.proceed()
+                } finally {
+                    color.setLong(node, stock)
+                    drawingSurface.set(surface)
+                }
+            }
             handles += ModernHook.aroundMethod(clip) { chain ->
                 val result = chain.proceed()
-                val plate = popup.get()
-                if (plate != null && rounded.isInstance(chain.args[1])) {
-                    plate.modifier = result
-                    plate.shape = chain.args[1]
+                val pass = active.get() ?: return@aroundMethod result
+                val nativeShape = chain.args[1]
+                if (pass.bound || !rounded.isInstance(nativeShape)) return@aroundMethod result
+                when (pass.renderer.mode) {
+                    PlateMode.CLIP -> {
+                        pass.bound = true
+                        then.invoke(result, overlay(pass.renderer.surface, requireNotNull(nativeShape)))
+                    }
+                    PlateMode.CLIPPED_FILL, PlateMode.SUBMENU -> {
+                        pass.clipModifier = result
+                        pass.nativeShape = nativeShape
+                        result
+                    }
+                    else -> result
                 }
-                result
             }
-            handles += ModernHook.aroundMethod(fill) { chain ->
-                val plate = popup.get()
-                val roundedShape = plate?.shape
-                if (roundedShape == null || chain.args[0] !== plate.modifier || chain.args[2] !== rectangle) {
-                    return@aroundMethod chain.proceed()
-                }
-                popup.remove()
-                val stock = chain.args[1] as Long
-                if (stock and 0xffffffffL != 0L) return@aroundMethod chain.proceed()
-                val args = chain.args.toTypedArray()
-                val alpha = ((stock ushr 56) * (1f - .60f * level() / 100f)).toInt()
-                args[1] = (stock and 0x00ffffffffffffffL) or (alpha.toLong() shl 56)
-                then.invoke(chain.proceed(args), overlay(Surface.SIM_POPUP, roundedShape))
-            }
-            ModernHook.deoptimize(renderer)
-            handles += ModernHook.aroundMethod(renderer) { chain ->
-                if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
-                val previous = popup.get()
-                popup.set(PopupPlate())
+            handles += ModernHook.aroundMethod(box) { chain ->
+                val pass = active.get() ?: return@aroundMethod chain.proceed()
+                if (pass.bound || pass.renderer.mode != PlateMode.BOX) return@aroundMethod chain.proceed()
+                pass.boxShape = chain.args[5]
                 try {
                     chain.proceed()
                 } finally {
-                    if (previous == null) popup.remove() else popup.set(previous)
+                    pass.boxShape = null
                 }
+            }
+            ModernHook.deoptimize(box)
+            handles += ModernHook.aroundMethod(fill) { chain ->
+                val pass = active.get() ?: return@aroundMethod chain.proceed()
+                if (pass.bound) return@aroundMethod chain.proceed()
+                val shapeArg = chain.args[2]
+                val stock = chain.args[1] as Long
+                if (stock and 0xffffffffL != 0L || stock ushr 56 < 6L) return@aroundMethod chain.proceed()
+                if (pass.renderer.mode == PlateMode.SUBMENU && pass.nativeShape != null && shapeArg === rectangle) {
+                    val args = chain.args.toTypedArray()
+                    args[0] = then.invoke(args[0], mask(pass.renderer.surface))
+                    return@aroundMethod chain.proceed(args)
+                }
+                val nativeShape = when (pass.renderer.mode) {
+                    PlateMode.BOX -> pass.boxShape?.takeIf { it === shapeArg || shapeArg === rectangle }
+                    PlateMode.FILL -> shapeArg?.takeIf(rounded::isInstance)
+                    PlateMode.CLIPPED_FILL -> pass.nativeShape?.takeIf {
+                        shapeArg === rectangle && chain.args[0] === pass.clipModifier
+                    }
+                    else -> null
+                } ?: return@aroundMethod chain.proceed()
+                pass.bound = true
+                val args = chain.args.toTypedArray()
+                args[0] = then.invoke(args[0], mask(pass.renderer.surface))
+                then.invoke(chain.proceed(args), overlay(pass.renderer.surface, nativeShape))
+            }
+            handles += ModernHook.aroundMethod(animatedVisibility) { chain ->
+                val pass = active.get() ?: return@aroundMethod chain.proceed()
+                val nativeShape = pass.nativeShape
+                if (pass.renderer.mode != PlateMode.SUBMENU || nativeShape == null || pass.bound) {
+                    return@aroundMethod chain.proceed()
+                }
+                pass.bound = true
+                val args = chain.args.toTypedArray()
+                args[1] = then.invoke(args[1], overlay(pass.renderer.surface, nativeShape))
+                args[7] = (args[7] as Int) and 0b1110000.inv()
+                args[8] = (args[8] as Int) and 0b10.inv()
+                chain.proceed(args)
+            }
+            handles += ModernHook.aroundMethod(fillWidth) { chain ->
+                val result = chain.proceed()
+                val pass = active.get() ?: return@aroundMethod result
+                if (pass.renderer.mode != PlateMode.ROW || pass.bound || ++pass.rows != pass.renderer.row) {
+                    return@aroundMethod result
+                }
+                pass.bound = true
+                then.invoke(result, overlay(pass.renderer.surface, rowShape))
+            }
+
+            val qs = "com.android.systemui.samsung.quicksetting.ui."
+            val tiles = qs + "tiles."
+            val media = qs + "media.components."
+            val panel = qs + "panel."
+            val settings = qs + "settings."
+            val details = qs + "details."
+            val renderers = listOf(
+                Renderer(Surface.CARD, tiles + "IconTextTileBackgroundKt", "IconTextTileBackground", PlateMode.BOX, 4),
+                Renderer(Surface.GRID, tiles + "QuickTileBoxKt", "QuickTileBox", PlateMode.CLIP, 5),
+                Renderer(Surface.SLIDER, tiles + "IconProgressBarWithTileKt", "IconProgressBarWithTile-S4AO9yg", PlateMode.CLIP),
+                Renderer(Surface.SIM_BAR, tiles + "MultiSIMPreferredBarKt\$\$ExternalSyntheticLambda5", "invoke", PlateMode.BOX, 3),
+                Renderer(Surface.SIM_POPUP, "base.packages.SystemUI.samsung.compose_qs.src." + tiles +
+                    "MultiSIMPreferredPopupKt", "MultiSIMPreferredPopup", PlateMode.CLIPPED_FILL),
+                Renderer(Surface.DETAIL_PANEL, details + "PopupDetailSceneKt", "DetailBG-J5j9r9c", PlateMode.FILL),
+                Renderer(Surface.HEADER_TOOLTIP, panel + "SecQuickSettingHeaderKt\$\$ExternalSyntheticLambda5", "invoke", PlateMode.FILL, 3),
+                Renderer(Surface.SECURITY_FOOTER, qs + "banner.SecurityFooterKt\$\$ExternalSyntheticLambda0", "invoke", PlateMode.ROW, 3),
+                Renderer(Surface.MEDIA, media + "OneUI90MediaPlayerPageKt", "OneUI90MediaPlayerPage-77lviBw", PlateMode.CLIPPED_FILL),
+                Renderer(Surface.MEDIA, media + "MediaPlayerPageKt", "MediaPlayerPage-iL6HX2k", PlateMode.CLIPPED_FILL),
+                Renderer(Surface.EMPTY_MEDIA, tiles + "OneUI90EmptyMediaPlayerKt\$\$ExternalSyntheticLambda2", "invoke", PlateMode.BOX, 3),
+                Renderer(Surface.CONTROL_BAR, tiles + "QuickControlBarKt\$\$ExternalSyntheticLambda3", "invoke", PlateMode.BOX, 3),
+                Renderer(Surface.PANEL_SETTINGS, settings + "PanelSettingGroupKt", "PanelSettingGroup", PlateMode.CLIPPED_FILL),
+                Renderer(Surface.PANEL_SETTINGS, settings + "PanelSettingViewTypeSelectorKt", "PanelSettingViewTypeSelector", PlateMode.CLIPPED_FILL),
+                Renderer(Surface.PANEL_SUBMENU, settings + "SubMenuContainerKt", "SubMenuContainer", PlateMode.SUBMENU),
+                Renderer(Surface.BRIGHTNESS_ACTIONS, details + "SecBrightnessDetailSceneKt", "BrightBarDetailCommandButtons", PlateMode.ROW),
+                Renderer(Surface.SOUNDCRAFT_ACTIONS, details + "soundcraft.SoundCraftMainKt", "DetailCommandButtons", PlateMode.ROW, row = 2),
+                Renderer(Surface.PRIVACY_ACTIONS, details + "screenprivacy.ScreenPrivacyDetailContentKt", "OptionItem", PlateMode.ROW, row = 2),
+                Renderer(Surface.DND_ACTIONS, details + "DndDetailPageKt\$\$ExternalSyntheticLambda4", "invoke", PlateMode.ROW, 3),
+                Renderer(Surface.EDITOR, panel + "ContextMenuKt", "ContextMenu-", PlateMode.FILL, 9),
+                Renderer(Surface.VOLUME_OPTIONS,
+                    "com.android.systemui.volume.panel.component.selector.ui.composable.VolumePanelRadioButtonsKt",
+                    "VolumePanelRadioButtonBar-cjTkxnM", PlateMode.FILL),
+                Renderer(Surface.VOLUME_POPUP,
+                    "com.android.systemui.volume.panel.component.popup.ui.composable.VolumePanelPopup",
+                    "PopupComposable", PlateMode.ROW, 4, row = 2),
+            )
+            for (renderer in renderers) runCatching {
+                if (renderer.surface == Surface.HEADER_TOOLTIP) {
+                    // PlainTooltip delegates its stock fill to a Material Surface content lambda.
+                    val surface = type("androidx.compose.material3.SurfaceKt")
+                    ModernHook.deoptimize(surface.declaredMethods.single { it.name == "surface-XO-JAsU" })
+                    val content = type("androidx.compose.material3.SurfaceKt\$\$ExternalSyntheticLambda0")
+                    ModernHook.deoptimize(content.getDeclaredMethod("invoke", Any::class.java, Any::class.java))
+                }
+                val method = type(renderer.owner).declaredMethods.single {
+                    (it.name == renderer.method || (renderer.method.endsWith("-") && it.name.startsWith(renderer.method))) &&
+                        (renderer.parameters == null || it.parameterCount == renderer.parameters)
+                }
+                ModernHook.deoptimize(method)
+                handles += ModernHook.aroundMethod(method) { chain ->
+                    val previous = active.get()
+                    active.set(RenderPass(renderer))
+                    try {
+                        chain.proceed()
+                    } finally {
+                        if (previous == null) active.remove() else active.set(previous)
+                    }
+                }
+                report(renderer.surface, GlassSurfaceStage.FOUND)
+                HookEntry.log("GLASS_QUICK_PLATE_READY ${renderer.surface.name.lowercase()} ${method.name}")
+            }.onFailure {
+                HookEntry.log("GLASS_QUICK_PLATE_UNAVAILABLE ${renderer.owner} ${it.javaClass.simpleName}")
             }
         } catch (error: Throwable) {
             handles.asReversed().forEach(ModernHook.Handle::unhook)
@@ -340,7 +457,7 @@ internal class GlassQuickTiles(
         try {
             ModernHook.deoptimize(renderer)
             ModernHook.aroundMethod(renderer) { chain ->
-                if (level() <= 0 || !unlocked() || drawingUnavailable || icon.getInt(chain.thisObject) !in icons) {
+                if (icon.getInt(chain.thisObject) !in icons) {
                     return@aroundMethod chain.proceed()
                 }
                 val previous = headerButton.get()
@@ -357,7 +474,7 @@ internal class GlassQuickTiles(
         }
     }
 
-    private fun installEditorSurfaces(
+    private fun installEditorButtons(
         loader: ClassLoader,
         resources: Resources,
         modifier: Class<*>,
@@ -366,10 +483,6 @@ internal class GlassQuickTiles(
     ) {
         fun type(name: String) = DexSymbols.findClass(name, false, loader)
         val panel = "com.android.systemui.samsung.quicksetting.ui.panel."
-        val rounded = type("androidx.compose.foundation.shape.RoundedCornerShape")
-        val background = type("androidx.compose.foundation.BackgroundKt").declaredMethods.single {
-            it.name == "background-bw27NRU" && it.parameterCount == 3 && it.parameterTypes[0] == modifier
-        }
         val button = type(panel + "SecQuickSettingHeaderKt").declaredMethods.single {
             it.name == "RoundedButton" && it.parameterCount == 7 && it.parameterTypes[0] == modifier
         }
@@ -377,35 +490,18 @@ internal class GlassQuickTiles(
             .declaredMethods.single {
                 it.name == "TileBoxDoneButton" && it.parameterCount == 5 && it.parameterTypes[0] == modifier
             }
-        val menu = type(panel + "ContextMenuKt").declaredMethods.single {
-            it.name.startsWith("ContextMenu-") && it.parameterCount == 9
-        }
         val editLabels = listOf("qs_customizer_settings", "quick_settings_done", "sec_quick_settings_done", "done")
             .map { resources.getIdentifier(it, "string", "com.android.systemui") }.filter { it != 0 }.toSet()
         val buttonShape = type("androidx.compose.foundation.shape.RoundedCornerShapeKt").getDeclaredMethod(
             "RoundedCornerShape-0680j_4", Float::class.javaPrimitiveType,
         ).invoke(null, 24f) ?: error("Editor button outline unavailable")
-        val editingPlate = ThreadLocal<Boolean>()
         val handles = mutableListOf<ModernHook.Handle>()
         try {
-            handles += ModernHook.aroundMethod(background) { chain ->
-                val shape = chain.args[2]
-                if (editingPlate.get() != true || !rounded.isInstance(shape)) return@aroundMethod chain.proceed()
-                editingPlate.remove()
-                val strength = editLevel()
-                val args = chain.args.toTypedArray()
-                val stock = args[1] as Long
-                if (stock and 0xffffffffL == 0L) {
-                    val alpha = ((stock ushr 56) * (1f - .45f * strength / 100f)).toInt()
-                    args[1] = (stock and 0x00ffffffffffffffL) or (alpha.toLong() shl 56)
-                }
-                then.invoke(chain.proceed(args), overlay(Surface.EDITOR, requireNotNull(shape)))
-            }
             for ((renderer, changedIndex) in listOf(button to 5, tileBoxButton to 4)) {
                 ModernHook.deoptimize(renderer)
                 handles += ModernHook.aroundMethod(renderer) { chain ->
                     val editorButton = (chain.args[1] as? Int)?.let(editLabels::contains) == true
-                    if (editLevel() <= 0 || !unlocked() || (renderer == button && !editorButton)) {
+                    if (renderer == button && !editorButton) {
                         return@aroundMethod chain.proceed()
                     }
                     val args = chain.args.toTypedArray()
@@ -413,17 +509,6 @@ internal class GlassQuickTiles(
                     // Ask Compose to compare the new modifier rather than reuse the caller's flag.
                     args[changedIndex] = (args[changedIndex] as Int) and 0b1110.inv()
                     chain.proceed(args)
-                }
-            }
-            ModernHook.deoptimize(menu)
-            handles += ModernHook.aroundMethod(menu) { chain ->
-                if (editLevel() <= 0 || !unlocked()) return@aroundMethod chain.proceed()
-                val previous = editingPlate.get()
-                editingPlate.set(true)
-                try {
-                    chain.proceed()
-                } finally {
-                    if (previous == null) editingPlate.remove() else editingPlate.set(previous)
                 }
             }
             HookEntry.log("GLASS_QUICK_EDITOR_READY")
@@ -442,7 +527,7 @@ internal class GlassQuickTiles(
                 ) == true) {
                 if (refractedSurfaces.add(surface)) {
                     HookEntry.log("GLASS_QUICK_REFRACTION ${surface.name.lowercase()}")
-                    if (surface == Surface.EDITOR) onEditorStage(GlassSurfaceStage.REFRACTED)
+                    report(surface, GlassSurfaceStage.REFRACTED)
                 }
                 return
             }
@@ -451,78 +536,14 @@ internal class GlassQuickTiles(
                 strength, dark, fill = !rim, rim = rim, glint = frame.light, profile = surface.profile,
             )
         } catch (error: Exception) {
-            drawingUnavailable = true
-            onFailed(error)
+            disable(surface, error)
         }
     }
 
-    private fun installNativeGroupSurfaces(
-        loader: ClassLoader,
-        modifier: Class<*>,
-        then: Method,
-        overlay: (Surface, Any) -> Any,
-    ) {
-        val tiles = "com.android.systemui.samsung.quicksetting.ui.tiles."
-        fun method(owner: String, name: String, count: Int? = null) =
-            DexSymbols.findClass(owner, false, loader).declaredMethods.single {
-                it.name == name && (count == null || it.parameterCount == count)
-            }
-        val grid = method(tiles + "QuickTileBoxKt", "QuickTileBox", 5)
-        val bars = method(tiles + "IconProgressBarWithTileKt", "IconProgressBarWithTile-S4AO9yg")
-        val iconText = method(tiles + "IconTextTileBackgroundKt", "IconTextTileBackground", 4)
-        val shape = DexSymbols.findClass("androidx.compose.ui.graphics.Shape", false, loader)
-        val rounded = DexSymbols.findClass("androidx.compose.foundation.shape.RoundedCornerShape", false, loader)
-        val clip = DexSymbols.findClass("androidx.compose.ui.draw.ClipKt", false, loader).getMethod("clip", modifier, shape)
-        val box = method(
-            "com.android.systemui.samsung.quicksetting.ui.common.uielement.BoxWithOutlineKt",
-            "BoxWithOutline-8QY48No", 10,
-        )
-        require(box.parameterTypes[0] == modifier && box.parameterTypes[4] == Long::class.javaPrimitiveType)
-        require(box.parameterTypes[8] == Int::class.javaPrimitiveType)
-        val nativeSurface = ThreadLocal<Surface>()
-        val handles = mutableListOf<ModernHook.Handle>()
-        try {
-            handles += ModernHook.aroundMethod(clip) { chain ->
-                val native = chain.proceed()
-                val surface = nativeSurface.get()
-                val nativeShape = chain.args[1]
-                if ((surface != Surface.GRID && surface != Surface.SLIDER) || !rounded.isInstance(nativeShape)) native
-                else {
-                    nativeSurface.remove()
-                    then.invoke(native, overlay(surface, requireNotNull(nativeShape)))
-                }
-            }
-            handles += ModernHook.aroundMethod(box) { chain ->
-                val nativeShape = chain.args[5]
-                val surface = nativeSurface.get()
-                if ((surface != Surface.CARD && surface != Surface.SIM_BAR) || !rounded.isInstance(nativeShape)) {
-                    return@aroundMethod chain.proceed()
-                }
-                val args = chain.args.toTypedArray()
-                val stockColor = args[4] as Long
-                // sRGB Compose Color stores ARGB in the upper word. Leave the invisible one-cell placeholder alone.
-                val alpha = (stockColor ushr 56).toInt()
-                if (stockColor and 0xffffffffL != 0L || alpha <= 5) return@aroundMethod chain.proceed()
-                val glassAlpha = (alpha * (1f - 0.70f * level() / 100f)).toInt().coerceIn(0, 255)
-                args[3] = 0L // The glass has its own rim. Suppress this card's stock outline.
-                args[4] = (stockColor and 0x00ffffffffffffffL) or (glassAlpha.toLong() shl 56)
-                args[0] = then.invoke(args[0], overlay(surface, requireNotNull(nativeShape)))
-                args[8] = (args[8] as Int) or 1
-                nativeSurface.remove()
-                chain.proceed(args)
-            }
-            for ((renderer, surface) in listOf(grid to Surface.GRID, bars to Surface.SLIDER, iconText to Surface.CARD)) {
-                handles += scopeRenderer(renderer, surface, nativeSurface)
-            }
-        } catch (error: Throwable) {
-            handles.asReversed().forEach { it.unhook() }
-            throw error
-        }
-        runCatching {
-            // BoxWithConstraints subcomposes Samsung's SIM bar after the entry function returns.
-            val renderer = method(tiles + "MultiSIMPreferredBarKt\$\$ExternalSyntheticLambda5", "invoke", 3)
-            scopeRenderer(renderer, Surface.SIM_BAR, nativeSurface)
-        }.onFailure { HookEntry.log("GLASS_QUICK_SIM_BAR_UNAVAILABLE ${it.javaClass.simpleName}") }
+    private fun report(surface: Surface, stage: GlassSurfaceStage) {
+        val name = if (surface == Surface.EDITOR) GlassSystemCatalog.EDITOR
+            else GlassSystemCatalog.QUICK_COMPOSE_PREFIX + surface.name.lowercase()
+        onSurface(name, stage)
     }
 
     fun refresh() {

@@ -64,6 +64,12 @@ internal object GlassSystemCatalog {
         dialog("privacy_dialog", "root"),
         dialog("sec_privacy_dialog", "root"),
         dialog("privacy_dialog_v2"),
+        root("sec_privacy_dialog_item_v2", 14),
+        root("privacy_dialog_item_v2", 28),
+        Layout("sec_controls_detail_dialog", listOf(Anchor("control_detail_root", 24), Anchor("control_detail_close", 22),
+            Anchor("control_detail_open_in_app", 22))),
+        plate("media_projection_app_selector", "android:singleInstance"),
+        root("media_projection_recent_tasks", 24),
         dialog("screen_record_options"),
         dialog("screen_share_dialog"),
         dialog("power_ui_dialog"),
@@ -100,6 +106,10 @@ internal object GlassSystemCatalog {
         plate("clipboard_overlay", "clipboard_preview", "actions_container_background", "minimized_preview"),
         Layout("clipboard_edit_text_activity", listOf(Anchor("done_button", 24))),
         plate("screenshot_shelf", "actions_container_background", "screenshot_message_container"),
+        Layout("long_screenshot", listOf(Anchor("save", 22, keepFill = true),
+            Anchor("cancel", 22), Anchor("edit", 22))),
+        Layout("app_clips_screenshot", listOf(Anchor("save", 22, keepFill = true),
+            Anchor("cancel", 22), Anchor("backlinks_data", 18))),
         plate("accessibility_floating_menu_tooltip", "text"),
         plate("sec_accessibility_floating_menu_tooltip", "text"),
         plate("accessibility_floating_menu_item", "icon_view"),
@@ -109,6 +119,11 @@ internal object GlassSystemCatalog {
         root("text_toast"),
         root("sem_text_toast"),
         root("global_actions_toast"),
+        root("volume_tool_tip_view", 22),
+        Layout("volume_warning_side_view_dialog", listOf(Anchor("negative_button", 20, keepFill = true),
+            Anchor("positive_button", 20, keepFill = true))),
+        Layout("volume_warning_camera_view_dialog", listOf(Anchor("negative_button", 20, keepFill = true),
+            Anchor("positive_button", 20, keepFill = true))),
         roundedPlate("compat_mode_hint", 22, "compat_mode_hint_text"),
         roundedPlate("chipbar", 24, "chipbar_inner"),
         roundedPlate("connected_display_chip", 20, "icons_rounded_container"),
@@ -128,6 +143,9 @@ internal object GlassSystemCatalog {
         Layout("media_carousel_settings_button", listOf(Anchor("background", 24))),
         root("media_popup_next_layout", 22),
         root("media_popup_prev_layout", 22),
+        Layout("sec_notification_app_info", listOf(shadePlate(null, 24),
+            Anchor("notification_guts_toggle_alert", 18, keepFill = true),
+            Anchor("notification_guts_toggle_silent", 18, keepFill = true))),
         Layout("notification_guts", emptyList(), notificationControls = NotificationControls.PLATE),
         Layout("notification_2025_conversation_info", emptyList(), notificationControls = NotificationControls.CONTENT),
         Layout("notification_2025_partial_conversation_info", emptyList(), notificationControls = NotificationControls.CONTENT),
@@ -197,6 +215,8 @@ internal object GlassSystemCatalog {
         root("desktop_windowing_education_tooltip_container", 16),
         root("mt_app_compat_simplified_combined_menu_layout", 20),
         root("drag_hint_to_fullscreen", 18),
+        plate("desktop_drop_view", "targetView"),
+        root("enter_desktop_layout", 18),
         roundedPlate("freeform_container_layout", 22, "freeform_container_tray_view", "freeform_container_recycler_view"),
         root("preview_list_container", 24),
         plate("open_by_default_settings_dialog", "open_by_default_dialog_container"),
@@ -225,6 +245,7 @@ internal object GlassSystemCatalog {
     )
 
     const val EDITOR = "quick_panel_editor"
+    const val QUICK_COMPOSE_PREFIX = "quick_compose_"
     const val LOCK_NOTIFICATIONS = "lockscreen_notification_card"
     const val NOTIFICATION_SHELF = "notification_shelf"
     const val BUBBLE_FLYOUT = "notification_bubble_flyout"
@@ -238,7 +259,7 @@ internal object GlassSystemCatalog {
 
     fun isDiagnosticName(name: String): Boolean = name == EDITOR || name == LOCK_NOTIFICATIONS ||
         name == NOTIFICATION_SHELF || name == BUBBLE_FLYOUT || name == SAMSUNG_TOOLTIP ||
-        name == QS_TOOLTIP || name in popupMenus.values || layouts.any { it.name == name }
+        name == QS_TOOLTIP || name.startsWith(QUICK_COMPOSE_PREFIX) || name in popupMenus.values || layouts.any { it.name == name }
 
     fun resolve(resources: Resources): Map<Int, Surface> = buildMap {
         for (layout in layouts) {

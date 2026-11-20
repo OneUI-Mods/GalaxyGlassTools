@@ -10,11 +10,13 @@ import android.graphics.Outline
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.DrawableWrapper
+import android.os.Bundle
 import android.os.Handler
 import android.provider.Settings
 import android.view.Display
 import android.view.View
 import android.view.ViewTreeObserver
+import android.view.WindowManager
 import androidx.annotation.RequiresApi
 import dev.ryuya.galaxyglass.compat.DexRuntimeCache
 import dev.ryuya.galaxyglass.compat.DexSymbols
@@ -24,7 +26,7 @@ import java.util.WeakHashMap
 import java.util.concurrent.Executor
 import kotlin.math.min
 
-/** Draws only into Samsung's native background layers, below the volume controls. */
+/** Draws into native background layers below the volume controls. */
 @RequiresApi(33)
 internal class GlassVolumePanel(
     app: Context,
@@ -38,7 +40,7 @@ internal class GlassVolumePanel(
     private val refreshUnlock: () -> Unit,
     private val onDrawn: () -> Unit,
 ) {
-    private enum class Role { COMPACT, EFFECT, DUAL, EXPANDED }
+    private enum class Role { COMPACT, EFFECT, DUAL, EXPANDED, AOSP }
 
     private val panels = WeakHashMap<Dialog, Panel>()
     private var active: Panel? = null
@@ -65,6 +67,12 @@ internal class GlassVolumePanel(
                     safely { stop(chain.thisObject as Dialog) }
                     chain.proceed()
                 }
+            }
+            runCatching {
+                val root = app.resources.getIdentifier("volume_dialog_background", "id", app.packageName)
+                watchAospDialog(loader, root)
+            }.onFailure {
+                HookEntry.log("GLASS_VOLUME_AOSP_UNAVAILABLE ${it.javaClass.simpleName}")
             }
             pluginDiscovery?.observe { context, pluginLoader ->
                 worker.execute { prepareSoundAssistant(context, pluginLoader, main) }
@@ -110,6 +118,20 @@ internal class GlassVolumePanel(
             safely { show(chain.thisObject as Dialog, expanded, ids) }
             result
         }
+    }
+
+    private fun watchAospDialog(loader: ClassLoader, root: Int) {
+        check(root != 0)
+        val type = DexSymbols.findClass("com.android.systemui.volume.dialog.VolumeDialog", false, loader)
+            .asSubclass(Dialog::class.java)
+        val create = type.getDeclaredMethod("onCreate", Bundle::class.java)
+        ModernHook.deoptimize(create)
+        ModernHook.aroundMethod(create) { chain ->
+            val result = chain.proceed()
+            safely { show(chain.thisObject as Dialog, false, nativeIds, aospRoot = root) }
+            result
+        }
+        HookEntry.log("GLASS_VOLUME_AOSP_READY")
     }
 
     private fun prepareSoundAssistant(context: Context, loader: ClassLoader, main: Handler) {
@@ -170,16 +192,17 @@ internal class GlassVolumePanel(
         }.onFailure { HookEntry.log("GLASS_VOLUME_EFFECT_UNAVAILABLE ${it.javaClass.simpleName}") }
     }
 
-    private fun show(dialog: Dialog, expanded: Boolean, ids: AnchorIds) {
+    private fun show(dialog: Dialog, expanded: Boolean, ids: AnchorIds, aospRoot: Int = 0) {
         val window = dialog.window ?: return
-        if (window.attributes.type != GlassPanelBackdrop.VOLUME_WINDOW_TYPE) return
+        if (window.attributes.type != GlassPanelBackdrop.VOLUME_WINDOW_TYPE ||
+            window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0) return
         panels[dialog]?.let {
             it.update()
             return
         }
         val decor = window.decorView
         val owner = WeakReference(dialog)
-        val panel = Panel(decor, expanded, ids) { owner.get()?.let(::stop) }
+        val panel = Panel(decor, expanded, ids, aospRoot) { owner.get()?.let(::stop) }
         panels[dialog] = panel
         active = panel
         // Dialog.onStart runs before the window is added. post() runs after it is attached.
@@ -224,7 +247,10 @@ internal class GlassVolumePanel(
         }
     }
 
-    private inner class Panel(decor: View, private val expanded: Boolean, private val ids: AnchorIds, onDetach: () -> Unit) {
+    private inner class Panel(
+        decor: View, private val expanded: Boolean, private val ids: AnchorIds,
+        private val aospRoot: Int, onDetach: () -> Unit,
+    ) {
         private val decorView = WeakReference(decor)
         private var observer: ViewTreeObserver? = null
         private var plate: Plate? = null
@@ -258,6 +284,7 @@ internal class GlassVolumePanel(
                 val radius = when (role) {
                     Role.COMPACT -> ids.compactRadius
                     Role.EFFECT -> Float.NaN
+                    Role.AOSP -> 24f * density
                     else -> ids.expandedRadius
                 }
                 val wrapper = Plate(anchor, stock, role, radius)
@@ -267,11 +294,12 @@ internal class GlassVolumePanel(
                     stock?.callback = wrapper
                 }
             }
-            if (active === this) backdrop.observe(anchor, true)
+            if (active === this && role != Role.AOSP) backdrop.observe(anchor, true)
             invalidate()
         }
 
         private fun findAnchor(decor: View): Pair<View?, Role> {
+            if (aospRoot != 0) return decor.findViewById<View>(aospRoot) to Role.AOSP
             if (expanded) {
                 val background = decor.findViewById<View>(ids.expanded)
                 return background?.findViewById<View>(ids.stroke) to Role.EXPANDED
@@ -336,12 +364,12 @@ internal class GlassVolumePanel(
             }
             // Compact's background provides the native idle track. The wider layouts already
             // have a base blur below this stroke view, and use the glass rim here.
-            if (role == Role.COMPACT) super.draw(canvas)
+            if (role == Role.COMPACT || role == Role.AOSP) super.draw(canvas)
             outline.setEmpty()
             stock?.getOutline(outline)
             if (!outline.getRect(visibleBounds) || visibleBounds.isEmpty) visibleBounds.set(bounds)
             val halfMinorSide = min(visibleBounds.width(), visibleBounds.height()) / 2f
-            val nativeRadius = outline.radius.takeIf { it >= 0f } ?: fallbackRadius
+            val nativeRadius = outline.radius.takeIf { it > 0f || (it == 0f && role != Role.AOSP) } ?: fallbackRadius
             val radius = if (nativeRadius.isFinite()) min(nativeRadius, halfMinorSide) else halfMinorSide
             radii.fill(radius)
             val night = dark(target)
@@ -351,7 +379,7 @@ internal class GlassVolumePanel(
             val bottom = visibleBounds.bottom.toFloat()
             localToScreen.reset()
             target.transformMatrixToGlobal(localToScreen)
-            val bent = localToScreen.invert(screenToLocal) && backdrop.draw(canvas, 0f, 0f,
+            val bent = role != Role.AOSP && localToScreen.invert(screenToLocal) && backdrop.draw(canvas, 0f, 0f,
                 left, top, right, bottom, radii, power, night, material.tintFactor, power * 0.014f, screenToLocal)
             material.drawSurface(canvas, left, top, right, bottom, radii, power, night,
                 fill = !bent, rim = true, profile = GlassMaterial.Profile.VOLUME)

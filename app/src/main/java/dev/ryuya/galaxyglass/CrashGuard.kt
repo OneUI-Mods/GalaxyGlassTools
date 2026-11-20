@@ -58,7 +58,7 @@ class CrashGuard private constructor(context: Context, fileName: String) {
     companion object {
         const val FILE: String = "dev.ryuya.galaxyglass.guard"
         private const val SYSTEM_UI_PREFIX = "com.android.systemui:"
-        private val appearanceHelpers = setOf("edgelighting", "screenshot", "fgservices", "multiwindowui")
+        private val appearanceHelpers = setOf("edgelighting", "screenshot", "appclips.screenshot", "fgservices", "multiwindowui")
 
         internal fun isSystemUiAppearanceHelper(process: String?): Boolean =
             process?.startsWith(SYSTEM_UI_PREFIX) == true && process.removePrefix(SYSTEM_UI_PREFIX) in appearanceHelpers

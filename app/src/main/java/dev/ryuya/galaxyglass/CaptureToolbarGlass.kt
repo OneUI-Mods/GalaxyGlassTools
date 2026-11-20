@@ -235,7 +235,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             effect.restoreBackground()
             return
         }
-        effect.makeTranslucent(view.background)
+        if (!effect.rimOnly) effect.makeTranslucent(view.background)
         effect.update(view)
         view.overlay.add(effect)
     }
@@ -243,7 +243,8 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private fun readTransparencySetting(): Boolean =
         Settings.System.getInt(runtime.context.contentResolver, REDUCE_TRANSPARENCY, 0) != 0
 
-    private fun createPlate(layout: String, cornerDp: Int?) = Plate(cornerDp, { runtime.strength }) { didDraw(layout) }
+    private fun createPlate(layout: String, cornerDp: Int?) =
+        Plate(cornerDp, { runtime.strength }, rimOnly = layout == CAMERA_FRAME) { didDraw(layout) }
 
     private fun didDraw(layout: String) {
         runtime.didDraw()
@@ -251,7 +252,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     }
 
     private class Plate(private val cornerDp: Int?, private val strength: () -> Int,
-        private val onDrawn: () -> Unit) : Drawable() {
+        val rimOnly: Boolean, private val onDrawn: () -> Unit) : Drawable() {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val outline = Outline()
         private val stockBounds = Rect()
@@ -315,10 +316,12 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             pathBounds.set(bounds)
             pathBounds.inset(line, line)
             val curve = (radius - line).coerceAtLeast(0f)
-            paint.style = Paint.Style.FILL
-            paint.shader = face
             paint.alpha = 255 * strength().coerceIn(0, 100) / 100
-            canvas.drawRoundRect(pathBounds, curve, curve, paint)
+            if (!rimOnly) {
+                paint.style = Paint.Style.FILL
+                paint.shader = face
+                canvas.drawRoundRect(pathBounds, curve, curve, paint)
+            }
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = line
             paint.shader = rim
@@ -334,6 +337,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
 
     companion object {
         private const val REDUCE_TRANSPARENCY = "accessibility_reduce_transparency"
+        private const val CAMERA_FRAME = "screen_recorder_view_rec_start_item_floating"
         private const val SCREENSHOT_LAYOUT = "scroll_capture_action_button_stand_alone"
         private val GUIDES = setOf("scroll_capture_guide_pop_up_layout", "pin_guide_pop_up_layout",
             "smart_select_guide_pop_up_layout")
@@ -368,7 +372,12 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             "popup_container" to listOf(Anchor(null, 22)),
             "popup_menu_button" to listOf(Anchor(null, 18)),
             "popup_overflow_button" to listOf(Anchor(null, 18)),
-            "partial_resizable_crop_view" to anchors("pin_confirm_button"),
+            "partial_resizable_crop_view" to anchors("record_area_moving_button", cornerDp = 24),
+            CAMERA_FRAME to anchors("fl_profile_white_frame", cornerDp = 48),
+            "custom_toast" to anchors("custom_toast_textview", cornerDp = 20),
+            "ai_select_ftu_dialog" to listOf(Anchor(null, 24)),
+            "ai_select_capsule_external_search" to anchors("search_button", cornerDp = 18),
+            "edge_panel_galaxy_ai" to anchors("content_view", cornerDp = 24),
             "rectangle_resizable_crop_view" to anchors("crop_confirm_button"),
             "pin_resizable_crop_view" to anchors("pin_confirm_button"),
             "pinui_vision_text_icon" to anchors("vision_text_button"),
@@ -398,6 +407,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             "ai_drawing_transparency_popup_layout" to anchors("blur_seek_bar_wrapper", cornerDp = 20),
             "style_popup_layout" to anchors("style_popup_main_layout", cornerDp = 22),
             "setting_popup_layout" to anchors("total_layout", cornerDp = 20),
+            "setting_color_setting_popup" to anchors("top_layout", cornerDp = 20),
             "setting_brush_setting_popup_layout" to anchors("drawing_brush_setting_popup_horizontal_view", cornerDp = 20),
             "setting_erase_all_menu_layout" to listOf(Anchor(null, 20)),
             "setting_favorite_option_menu_layout" to listOf(Anchor(null, 20)),

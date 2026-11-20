@@ -249,8 +249,8 @@ internal class GlassHost(
             update(GlassAppearance.SYSTEM_SURFACES, next.systemSurfaces, systemSurfaces != null) {
                 installSystemSurfaces()
             }
-            if (!next.quick && next.systemSurfaces && quick == null) runCatching { installQuickSurfaces() }
-                .onFailure { HookEntry.log("GLASS_QUICK_EDITOR_UNAVAILABLE ${it.javaClass.simpleName}") }
+            if (quick == null) runCatching { installQuickSurfaces() }
+                .onFailure { HookEntry.log("GLASS_COMPOSE_PLATES_UNAVAILABLE ${it.javaClass.simpleName}") }
         } else if (!systemUi) {
             update(GlassAppearance.HOME, next.home, dock != null) {
                 dock = GlassHomeSurfaces(app, loader, main, worker, { if (appearance.home) appearance.strength else 0 },
@@ -306,10 +306,11 @@ internal class GlassHost(
     private fun installQuickSurfaces() {
         quick = GlassQuickTiles(loader, app.resources, { if (appearance.quick) appearance.strength else 0 },
             { if (appearance.systemSurfaces && systemSurfaces?.allowsEditorGlass() == true) appearance.strength else 0 },
+            { if (appearance.volume) appearance.strength else 0 },
             ::isNight, { unlocked }, { shadeLight.pointer }, material, app.resources.displayMetrics.density,
             { panelBackdrop }, { markDrawn(GlassAppearance.QUICK) },
-            { markDrawn(GlassAppearance.SYSTEM_SURFACES) }, { markFailed(GlassAppearance.QUICK, it) },
-            { reportSurface(GlassSystemCatalog.EDITOR, it) })
+            { markDrawn(GlassAppearance.SYSTEM_SURFACES) },
+            { markDrawn(GlassAppearance.VOLUME) }, ::reportSurface)
     }
 
     @RequiresApi(33)
@@ -422,12 +423,6 @@ internal class GlassHost(
 
     private fun markDrawn(feature: String) {
         if (drawn.add(feature)) publish(feature, "DRAWN")
-    }
-
-    private fun markFailed(feature: String, error: Exception) {
-        unavailable += feature
-        HookEntry.log("GLASS_DRAW_FAILED $feature ${error.javaClass.simpleName}: ${error.message}")
-        publish(feature, "UNSUPPORTED", error.javaClass.simpleName)
     }
 
     private fun publish(feature: String, state: String, detail: String = "") {

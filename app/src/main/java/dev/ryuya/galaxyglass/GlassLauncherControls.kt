@@ -64,6 +64,9 @@ internal class GlassLauncherControls(
         PAGE_EDIT("home_page_edit"), PICKER_SELECTION("folder_picker_selection"), DRAG_GUIDE("drawer_drag_guide"),
         WIDGET_PICKER_SEARCH("widget_picker_search"), FOLDER_TASKBAR_DIALOG("folder_taskbar_dialog"),
         WIDGET_PREVIEW_GROUP("widget_preview_group"), PAGE_EDIT_ACTION("home_page_edit_action"),
+        WIDGET_PICKER_SHEET("widget_picker_sheet"), WINDOW_OPTIONS("window_options"),
+        FINDER_RESULT("finder_result"), DESKTOP_TASK_SWITCHER("desktop_task_switcher"),
+        DESKTOP_TIP("desktop_tip"),
     }
 
     private data class PlateAnchor(val viewId: Int, val role: Role, val parent: Boolean = false)
@@ -107,6 +110,19 @@ internal class GlassLauncherControls(
             }
         }
         add("quickoption_container", "quickoption_container", Role.MENU)
+        add("window_options", "window_options_menu", Role.WINDOW_OPTIONS)
+        add("add_widget_view", "add_widget_coordinator", Role.WIDGET_PICKER_SHEET)
+        add("widget_list_view_tablet", "widget_container", Role.WIDGET_PICKER_SHEET)
+        add("widget_list_view_tablet", "sesl_search_bar", Role.WIDGET_PICKER_SEARCH)
+        add("searchscreen_pot_view", "see_more_results_button", Role.FINDER_RESULT)
+        add("drag_out_guide", "drag_out_guide", Role.DRAG_GUIDE)
+        add("drag_out_guide_bottom", "drag_out_guide", Role.DRAG_GUIDE)
+        add("task_switcher_pot_view", "task_switcher_empty_message_container", Role.DESKTOP_TASK_SWITCHER)
+        add("task_switcher_pot_view", "task_switcher_task_container", Role.DESKTOP_TASK_SWITCHER)
+        add("new_desktop_help_tips_layout", "bubble_bg_left", Role.DESKTOP_TIP)
+        add("new_desktop_help_tips_layout", "bubble_bg_right", Role.DESKTOP_TIP)
+        for (layout in listOf("message_card_item_layout", "call_recording_card_item_layout",
+            "search_cp_single_line_card_item_layout")) add(layout, null, Role.FINDER_RESULT)
         add("task_menu_layout", "content", Role.RECENTS_TASK_MENU)
         add("page_edit_panel", "page_edit_panel", Role.PAGE_EDIT)
         add("drag_guide_top_panel", "drag_guide_top_container", Role.DRAG_GUIDE)
@@ -713,7 +729,8 @@ internal class GlassLauncherControls(
                     effect?.update(host, strength, corner, keepFill = true)
                 }
                 Role.MULTI_SELECT_ACTION -> effect?.update(host, strength, 18, keepFill = true)
-                Role.FINDER_CHIP -> effect?.update(host, strength, 18, boundedPlate = true)
+                Role.FINDER_CHIP, Role.FINDER_RESULT -> effect?.update(host, strength, 18, boundedPlate = true)
+                Role.DESKTOP_TIP -> effect?.update(host, strength, 18, keepFill = true)
                 Role.DRAWER_SORT -> effect?.update(host, strength, 24, keepFill = true)
                 Role.PAGE_EDIT_ACTION -> effect?.update(host, strength, 24, boundedPlate = true)
                 Role.MORE -> {
