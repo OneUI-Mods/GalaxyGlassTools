@@ -135,7 +135,10 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     }
 
     private fun refresh() {
-        plates.entries.toList().forEach { (view, effect) -> update(view, effect) }
+        plates.entries.toList().forEach { (view, effect) ->
+            update(view, effect)
+            effect.invalidateSelf()
+        }
         screenshotPlates.keys.toList().forEach(View::invalidate)
         guideParts.entries.toList().forEach { (view, guide) -> guide.refresh(view) }
     }

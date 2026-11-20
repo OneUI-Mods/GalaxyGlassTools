@@ -266,19 +266,22 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val area = RectF()
         private var dark = false
+        private var tint = -1
         private var light: LinearGradient? = null
         private var edge: LinearGradient? = null
         private var drawn = false
 
         fun resize(width: Int, height: Int, night: Boolean) {
-            if (bounds.width() == width && bounds.height() == height && dark == night) return
+            if (bounds.width() == width && bounds.height() == height && dark == night && tint == runtime.tint) return
             setBounds(0, 0, width, height)
             dark = night
+            tint = runtime.tint
             // Inset the lighting inside the Samsung contour so its smooth corners stay clean.
             val inset = 1.55f * density
             area.set(inset, inset, width - inset, height - inset)
+            val glint = if (dark) 0x24b3d8ff else 0x3effffff
             light = LinearGradient(0f, inset, width * .32f, height * .9f,
-                intArrayOf(if (dark) 0x24b3d8ff else 0x3effffff, Color.TRANSPARENT, 0x140c1830),
+                intArrayOf(tinted(glint), Color.TRANSPARENT, tinted(0x140c1830)),
                 floatArrayOf(0f, .46f, 1f), Shader.TileMode.CLAMP)
             edge = LinearGradient(0f, inset, width * .8f, height.toFloat(),
                 intArrayOf(0x91e6f3ff.toInt(), 0x25dceafa, 0x4b6ea0cd), floatArrayOf(0f, .48f, 1f),
@@ -286,12 +289,14 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
             invalidateSelf()
         }
 
+        private fun tinted(color: Int): Int = ColorUtils.setAlphaComponent(color,
+            (Color.alpha(color) * runtime.faceTint).roundToInt().coerceIn(0, 255))
+
         override fun draw(canvas: Canvas) {
             if (area.isEmpty) return
             val radius = (corner - 1.55f * density).coerceAtLeast(0f)
             paint.style = Paint.Style.FILL
             paint.shader = light
-            paint.alpha = (255 * runtime.faceTint.coerceAtMost(1f)).roundToInt()
             canvas.drawRoundRect(area, radius, radius, paint)
             paint.style = Paint.Style.STROKE
             paint.alpha = 255
