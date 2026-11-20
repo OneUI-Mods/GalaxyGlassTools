@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/glass_appearance_page"
+    style="@style/GlassSettingsPage">
+
+    <LinearLayout style="@style/GlassSettingsContent">
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/GlassSettingsCard"
+            app:cardBackgroundColor="?attr/colorPrimaryContainer">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/glass_enabled"
+                style="@style/GlassSettingsSwitch"
+                android:minHeight="64dp"
+                android:paddingStart="18dp"
+                android:paddingEnd="18dp"
+                android:text="@string/glass_enabled"
+                android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                android:textColor="?attr/colorOnPrimaryContainer" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <TextView
+            android:id="@+id/glass_preview_notice"
+            style="@style/GlassSettingsSupporting"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+
+        <dev.ryuya.galaxyglass.GlassPreview
+            android:id="@+id/glass_preview"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:layout_marginTop="16dp"
+            android:contentDescription="@string/glass_preview" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/GlassSettingsCard"
+            android:layout_marginTop="16dp">
+
+            <LinearLayout style="@style/GlassSettingsCardContent">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:baselineAligned="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:labelFor="@id/glass_strength"
+                        android:text="@string/glass_strength"
+                        android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
+
+                    <TextView
+                        android:id="@+id/glass_value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:importantForAccessibility="no"
+                        android:paddingStart="12dp"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                        android:textColor="?attr/colorPrimary" />
+                </LinearLayout>
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/glass_strength"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stepSize="5"
+                    android:valueFrom="0"
+                    android:valueTo="100" />
+
+                <com.google.android.material.divider.MaterialDivider
+                    style="@style/GlassSettingsDivider"
+                    android:layout_marginBottom="12dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:baselineAligned="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:labelFor="@id/glass_tint"
+                        android:text="@string/glass_tint"
+                        android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
+
+                    <TextView
+                        android:id="@+id/glass_tint_value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:importantForAccessibility="no"
+                        android:paddingStart="12dp"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                        android:textColor="?attr/colorPrimary" />
+                </LinearLayout>
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/glass_tint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stepSize="5"
+                    android:valueFrom="0"
+                    android:valueTo="100" />
+
+                <TextView
+                    style="@style/GlassSettingsSupporting"
+                    android:text="@string/glass_tint_hint" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

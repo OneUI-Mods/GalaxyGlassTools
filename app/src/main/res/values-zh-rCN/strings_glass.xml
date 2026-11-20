@@ -15,8 +15,6 @@
     <string name="glass_requirements">实验功能。更改磁贴设置后，请重新打开快捷设置面板。在 Vector 中为相应界面启用 SystemUI 或 One UI 主屏幕。</string>
     <string name="glass_preview_only">此设备仅支持预览。实际应用需要运行 One UI 9 BZI9 的 SM-S948Q。</string>
     <string name="glass_status_line">%1$s · %2$s</string>
-    <string name="glass_state_off">关闭</string>
-    <string name="glass_state_master_off">上级开关已关闭</string>
     <string name="glass_state_reload">需要重新载入</string>
     <string name="glass_state_pending">等待首帧绘制</string>
     <string name="glass_state_drawn">已绘制</string>
@@ -40,11 +38,19 @@
     <string name="license_title">开源许可证</string>
     <string name="own_license">应用许可证（MIT）</string>
     <string name="license_unavailable">无法加载许可证信息。</string>
-    <string name="glass_system_apps">系统应用</string>
     <string name="glass_system_app_scope_request">将所有系统应用加入作用域</string>
     <string name="glass_system_app_scope_count">有界面的系统应用：%1$d / %2$d 已加入</string>
     <string name="glass_system_app_scope_pending">请在 Xposed 管理器中批准作用域请求。</string>
     <string name="glass_system_app_scope_approved">作用域已更新（%1$d / %2$d）。重新打开应用即可加载。</string>
     <string name="glass_system_app_scope_disconnected">正在等待 Xposed 管理器。请在管理器中启用模块，然后重新打开此应用。</string>
     <string name="glass_system_app_scope_failed">未能添加作用域。请重试，或在 Xposed 管理器中选择应用。</string>
+    <string name="glass_settings_tab_appearance">外观</string>
+    <string name="glass_settings_tab_targets">应用范围</string>
+    <string name="glass_settings_tab_management">管理</string>
+    <string name="glass_settings_system_ui">SystemUI</string>
+    <string name="glass_settings_home_capture">主屏幕和截图录屏</string>
+    <string name="glass_settings_device">设备支持</string>
+    <string name="glass_settings_other_system_apps">其他系统应用</string>
+    <string name="glass_settings_master_off_notice">玻璃效果的总开关已关闭。</string>
+    <string name="glass_settings_preview_only">此设备仅支持预览。</string>
 </resources>

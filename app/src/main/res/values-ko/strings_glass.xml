@@ -15,8 +15,6 @@
     <string name="glass_requirements">실험 기능입니다. 타일 설정을 변경한 후 빠른 설정을 다시 여세요. Vector에서 SystemUI 또는 One UI 홈을 활성화하세요.</string>
     <string name="glass_preview_only">이 기기에서는 미리보기만 가능합니다. 실제 적용은 One UI 9 BZI9가 설치된 SM-S948Q에서 지원됩니다.</string>
     <string name="glass_status_line">%1$s · %2$s</string>
-    <string name="glass_state_off">꺼짐</string>
-    <string name="glass_state_master_off">상위 설정 꺼짐</string>
     <string name="glass_state_reload">다시 로드 필요</string>
     <string name="glass_state_pending">첫 그리기 대기 중</string>
     <string name="glass_state_drawn">그리기 확인됨</string>
@@ -40,11 +38,19 @@
     <string name="license_title">오픈소스 라이선스</string>
     <string name="own_license">앱 라이선스 (MIT)</string>
     <string name="license_unavailable">라이선스 정보를 불러오지 못했습니다.</string>
-    <string name="glass_system_apps">시스템 앱</string>
     <string name="glass_system_app_scope_request">모든 시스템 앱을 적용 범위에 추가</string>
     <string name="glass_system_app_scope_count">화면이 있는 시스템 앱 %2$d개 중 %1$d개가 범위에 포함됨</string>
     <string name="glass_system_app_scope_pending">Xposed 관리자에서 적용 범위 추가를 허용하세요.</string>
     <string name="glass_system_app_scope_approved">범위를 업데이트했습니다(%2$d개 중 %1$d개). 앱을 다시 열면 적용됩니다.</string>
     <string name="glass_system_app_scope_disconnected">Xposed 관리자 연결을 대기 중입니다. 관리자에서 모듈을 켜고 앱을 다시 여세요.</string>
     <string name="glass_system_app_scope_failed">범위를 추가하지 못했습니다. 다시 시도하거나 Xposed 관리자에서 앱을 선택하세요.</string>
+    <string name="glass_settings_tab_appearance">모양</string>
+    <string name="glass_settings_tab_targets">적용 대상</string>
+    <string name="glass_settings_tab_management">관리</string>
+    <string name="glass_settings_system_ui">SystemUI</string>
+    <string name="glass_settings_home_capture">홈 및 캡처</string>
+    <string name="glass_settings_device">기기 지원</string>
+    <string name="glass_settings_other_system_apps">기타 시스템 앱</string>
+    <string name="glass_settings_master_off_notice">글라스 효과 전체 스위치가 꺼져 있습니다.</string>
+    <string name="glass_settings_preview_only">이 기기에서는 미리 보기만 사용할 수 있습니다.</string>
 </resources>

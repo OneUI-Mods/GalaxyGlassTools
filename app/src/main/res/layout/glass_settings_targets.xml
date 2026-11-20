@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/glass_targets_page"
+    style="@style/GlassSettingsPage"
+    android:visibility="gone">
+
+    <LinearLayout style="@style/GlassSettingsContent">
+
+        <TextView
+            android:id="@+id/glass_targets_notice"
+            style="@style/GlassSettingsSupporting"
+            android:layout_marginBottom="12dp"
+            android:visibility="gone" />
+
+        <com.google.android.material.card.MaterialCardView style="@style/GlassSettingsCard">
+            <LinearLayout style="@style/GlassSettingsCardContent">
+
+                <TextView
+                    style="@style/GlassSettingsHeading"
+                    android:text="@string/glass_settings_system_ui" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_quick"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_quick" />
+
+                <TextView
+                    android:id="@+id/glass_quick_state"
+                    style="@style/GlassSettingsTargetState" />
+
+                <com.google.android.material.divider.MaterialDivider style="@style/GlassSettingsDivider" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_notifications"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_notifications" />
+
+                <TextView
+                    android:id="@+id/glass_notifications_state"
+                    style="@style/GlassSettingsTargetState" />
+
+                <com.google.android.material.divider.MaterialDivider style="@style/GlassSettingsDivider" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_lock_screen"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_lock_screen" />
+
+                <TextView
+                    android:id="@+id/glass_lock_screen_state"
+                    style="@style/GlassSettingsTargetState" />
+
+                <com.google.android.material.divider.MaterialDivider style="@style/GlassSettingsDivider" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_volume"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_volume" />
+
+                <TextView
+                    android:id="@+id/glass_volume_state"
+                    style="@style/GlassSettingsTargetState" />
+
+                <com.google.android.material.divider.MaterialDivider style="@style/GlassSettingsDivider" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_system_surfaces"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_system_surfaces" />
+
+                <TextView
+                    android:id="@+id/glass_system_surfaces_state"
+                    style="@style/GlassSettingsTargetState" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/GlassSettingsCard"
+            android:layout_marginTop="12dp">
+
+            <LinearLayout style="@style/GlassSettingsCardContent">
+
+                <TextView
+                    style="@style/GlassSettingsHeading"
+                    android:text="@string/glass_settings_home_capture" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_home"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_home" />
+
+                <TextView
+                    android:id="@+id/glass_home_state"
+                    style="@style/GlassSettingsTargetState" />
+
+                <com.google.android.material.divider.MaterialDivider style="@style/GlassSettingsDivider" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_capture"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_capture" />
+
+                <TextView
+                    android:id="@+id/glass_capture_state"
+                    style="@style/GlassSettingsTargetState" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/GlassSettingsCard"
+            android:layout_marginTop="12dp">
+
+            <LinearLayout style="@style/GlassSettingsCardContent">
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/glass_system_apps"
+                    style="@style/GlassSettingsSwitch"
+                    android:text="@string/glass_settings_other_system_apps"
+                    android:textAppearance="@style/TextAppearance.Material3.TitleMedium" />
+
+                <TextView
+                    android:id="@+id/glass_system_app_scope_status"
+                    style="@style/GlassSettingsSupporting"
+                    android:accessibilityLiveRegion="polite" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/glass_system_app_scope"
+                    style="@style/GlassSettingsAction"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/glass_system_app_scope_request" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

@@ -15,8 +15,6 @@
     <string name="glass_requirements">Enable the three target apps in your Xposed manager and reload their processes to apply glass effects.</string>
     <string name="glass_preview_only">Preview only on this device. The live effect requires SM-S948Q with One UI 9 build BZI9.</string>
     <string name="glass_status_line">%1$s · %2$s</string>
-    <string name="glass_state_off">Off</string>
-    <string name="glass_state_master_off">Parent switch off</string>
     <string name="glass_state_reload">Reload required</string>
     <string name="glass_state_pending">Waiting for first draw</string>
     <string name="glass_state_drawn">Drawn</string>
@@ -36,11 +34,19 @@
     <string name="license_title">Open-source licenses</string>
     <string name="own_license">App license (MIT)</string>
     <string name="license_unavailable">License data could not be loaded.</string>
-    <string name="glass_system_apps">System apps</string>
     <string name="glass_system_app_scope_request">Add all system apps to scope</string>
     <string name="glass_system_app_scope_count">In scope: %1$d of %2$d system apps with screens</string>
     <string name="glass_system_app_scope_pending">Approve the scope request in your Xposed manager.</string>
     <string name="glass_system_app_scope_approved">Scope approved (%1$d of %2$d). Reopen the apps to load glass.</string>
     <string name="glass_system_app_scope_disconnected">Waiting for the Xposed manager. Enable this module in the manager and reopen it.</string>
     <string name="glass_system_app_scope_failed">The scope request was not approved. You can try again or select apps in the Xposed manager.</string>
+    <string name="glass_settings_tab_appearance">Appearance</string>
+    <string name="glass_settings_tab_targets">Targets</string>
+    <string name="glass_settings_tab_management">Manage</string>
+    <string name="glass_settings_system_ui">SystemUI</string>
+    <string name="glass_settings_home_capture">Home and capture</string>
+    <string name="glass_settings_device">Device support</string>
+    <string name="glass_settings_other_system_apps">Other system apps</string>
+    <string name="glass_settings_master_off_notice">Glass effects are off globally.</string>
+    <string name="glass_settings_preview_only">Preview only on this device.</string>
 </resources>

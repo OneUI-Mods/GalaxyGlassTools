@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/glass_management_page"
+    style="@style/GlassSettingsPage"
+    android:visibility="gone">
+
+    <LinearLayout style="@style/GlassSettingsContent">
+
+        <com.google.android.material.card.MaterialCardView style="@style/GlassSettingsCard">
+            <LinearLayout style="@style/GlassSettingsCardContent">
+
+                <TextView
+                    style="@style/GlassSettingsHeading"
+                    android:text="@string/glass_settings_device" />
+
+                <TextView
+                    android:id="@+id/glass_requirements"
+                    style="@style/GlassSettingsSupporting"
+                    android:layout_marginTop="6dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/glass_surface_diagnostics"
+                    style="@style/GlassSettingsAction"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/glass_surface_diagnostics"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/GlassSettingsCard"
+            android:layout_marginTop="12dp">
+
+            <LinearLayout style="@style/GlassSettingsCardContent">
+
+                <TextView
+                    style="@style/GlassSettingsHeading"
+                    android:text="@string/glass_reload_title" />
+
+                <TextView
+                    android:id="@+id/glass_reload_status"
+                    style="@style/GlassSettingsSupporting"
+                    android:layout_marginTop="6dp"
+                    android:accessibilityLiveRegion="polite"
+                    android:text="@string/glass_reload_hint" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/glass_reload_home"
+                    style="@style/GlassSettingsAction"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/glass_reload_home" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/glass_reload_capture"
+                    style="@style/GlassSettingsAction"
+                    android:text="@string/glass_reload_capture" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/glass_licenses"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:minHeight="48dp"
+            android:text="@string/license_title" />
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

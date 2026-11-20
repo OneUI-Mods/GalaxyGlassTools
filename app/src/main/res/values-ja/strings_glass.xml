@@ -15,8 +15,6 @@
     <string name="glass_requirements">VectorなどでSystemUI・One UIホーム・Samsung Captureを有効にし、各プロセスを再読み込みしてください。</string>
     <string name="glass_preview_only">この端末ではプレビューのみ利用できます。実際の画面への適用にはSM-S948QのOne UI 9 BZI9が必要です。</string>
     <string name="glass_status_line">%1$s · %2$s</string>
-    <string name="glass_state_off">オフ</string>
-    <string name="glass_state_master_off">対象の全体設定がオフ</string>
     <string name="glass_state_reload">対象の再読み込みが必要</string>
     <string name="glass_state_pending">最初の描画を待機中</string>
     <string name="glass_state_drawn">描画を確認済み</string>
@@ -40,11 +38,19 @@
     <string name="license_title">オープンソースライセンス</string>
     <string name="own_license">アプリのライセンス（MIT）</string>
     <string name="license_unavailable">ライセンス情報を読み込めませんでした。</string>
-    <string name="glass_system_apps">システムアプリ</string>
     <string name="glass_system_app_scope_request">システムアプリを一括で適用範囲に追加</string>
     <string name="glass_system_app_scope_count">画面を持つシステムアプリ %2$d 件中 %1$d 件が適用範囲内</string>
     <string name="glass_system_app_scope_pending">Xposedマネージャーで適用範囲の追加を許可してください。</string>
     <string name="glass_system_app_scope_approved">適用範囲を更新しました（%2$d 件中 %1$d 件）。各アプリを開き直すと読み込みます。</string>
     <string name="glass_system_app_scope_disconnected">Xposedマネージャーへの接続待ちです。マネージャーでこのモジュールを有効にして開き直してください。</string>
     <string name="glass_system_app_scope_failed">適用範囲を追加できませんでした。再試行するか、Xposedマネージャーで対象を選んでください。</string>
+    <string name="glass_settings_tab_appearance">外観</string>
+    <string name="glass_settings_tab_targets">適用先</string>
+    <string name="glass_settings_tab_management">管理</string>
+    <string name="glass_settings_system_ui">SystemUI</string>
+    <string name="glass_settings_home_capture">ホームと撮影</string>
+    <string name="glass_settings_device">端末での適用</string>
+    <string name="glass_settings_other_system_apps">その他のシステムアプリ</string>
+    <string name="glass_settings_master_off_notice">ガラス表示の全体スイッチはオフです。</string>
+    <string name="glass_settings_preview_only">この端末ではプレビューのみ利用できます。</string>
 </resources>

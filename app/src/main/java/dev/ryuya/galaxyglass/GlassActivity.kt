@@ -1,13 +1,15 @@
 package dev.ryuya.galaxyglass
 
-import android.content.Intent
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.provider.Settings
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
 import android.widget.TextView
+import androidx.annotation.IdRes
+import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -16,20 +18,51 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
+import com.google.android.material.tabs.TabLayout
 
 class GlassActivity : AppCompatActivity() {
-    private var statePrefs: SharedPreferences? = null
+    private enum class Page(@StringRes val title: Int, @IdRes val view: Int) {
+        APPEARANCE(R.string.glass_settings_tab_appearance, R.id.glass_appearance_page),
+        TARGETS(R.string.glass_settings_tab_targets, R.id.glass_targets_page),
+        MANAGEMENT(R.string.glass_settings_tab_management, R.id.glass_management_page),
+    }
+
+    private enum class TargetOption(
+        val host: String, val key: String, @IdRes val control: Int, @IdRes val status: Int,
+    ) {
+        QUICK(GlassTargets.SYSTEM_UI, GlassAppearance.QUICK, R.id.glass_quick, R.id.glass_quick_state),
+        NOTIFICATIONS(GlassTargets.SYSTEM_UI, GlassAppearance.NOTIFICATIONS,
+            R.id.glass_notifications, R.id.glass_notifications_state),
+        LOCK_SCREEN(GlassTargets.SYSTEM_UI, GlassAppearance.LOCK_SCREEN, R.id.glass_lock_screen, R.id.glass_lock_screen_state),
+        VOLUME(GlassTargets.SYSTEM_UI, GlassAppearance.VOLUME, R.id.glass_volume, R.id.glass_volume_state),
+        MENUS(GlassTargets.SYSTEM_UI, GlassAppearance.SYSTEM_SURFACES,
+            R.id.glass_system_surfaces, R.id.glass_system_surfaces_state),
+        HOME(GlassTargets.LAUNCHER, GlassAppearance.HOME, R.id.glass_home, R.id.glass_home_state),
+        CAPTURE(GlassTargets.CAPTURE, GlassTargets.CAPTURE_SETTING, R.id.glass_capture, R.id.glass_capture_state);
+
+        val statusKey: String get() = "$host.$key"
+    }
+
+    private lateinit var statePrefs: SharedPreferences
     private var stateListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var refreshTargetStates: (() -> Unit)? = null
     private var scopeStatus: TextView? = null
     private var scopeGeneration = 0
+    private var page = Page.APPEARANCE
 
     override fun onResume() {
         super.onResume()
-        updateSystemAppScope(request = false)
+        refreshTargetStates?.invoke()
+        if (page == Page.TARGETS) updateSystemAppScope(request = false)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(STATE_PAGE, page.ordinal)
     }
 
     override fun onDestroy() {
-        stateListener?.let { statePrefs?.unregisterOnSharedPreferenceChangeListener(it) }
+        stateListener?.let(statePrefs::unregisterOnSharedPreferenceChangeListener)
         super.onDestroy()
     }
 
@@ -37,9 +70,12 @@ class GlassActivity : AppCompatActivity() {
         AppUiTheme.apply(this)
         super.onCreate(state)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            val lightSurface = !resources.configuration.isNightModeActive
+            isAppearanceLightStatusBars = lightSurface
+            isAppearanceLightNavigationBars = lightSurface
+        }
         setContentView(R.layout.activity_glass)
-        GlassSettings.migrate(this)
-        bindReloadButtons()
         val root = requireViewById<View>(R.id.glass_root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -47,38 +83,166 @@ class GlassActivity : AppCompatActivity() {
             WindowInsetsCompat.CONSUMED
         }
         ViewCompat.requestApplyInsets(root)
-        requireViewById<View>(R.id.glass_licenses).setOnClickListener {
-            startActivity(Intent(this, LicensesActivity::class.java))
-        }
+
+        GlassSettings.migrate(this)
         val prefs = getSharedPreferences(ConfigProvider.PREFS, Context.MODE_PRIVATE)
-        val master = requireViewById<MaterialSwitch>(R.id.glass_enabled)
-        requireViewById<MaterialSwitch>(R.id.glass_system_apps).apply {
-            val key = ApplicationGlassConfig.SYSTEM_SWITCH
-            isChecked = prefs.getBoolean(key, true)
-            setOnCheckedChangeListener { _, enabled ->
-                prefs.edit().putBoolean(key, enabled).apply()
-                FrameworkServiceConnection.publishApplicationGlassConfig(this@GlassActivity)
+        statePrefs = getSharedPreferences("host_status", Context.MODE_PRIVATE)
+        val supported = GlassTargets.supportsCaptureGlass()
+        bindAppearanceAndTargets(prefs, supported)
+        bindManagement(supported)
+        bindPages(Page.entries.getOrElse(state?.getInt(STATE_PAGE) ?: 0) { Page.APPEARANCE })
+    }
+
+    private fun bindPages(initialPage: Page) {
+        val tabs = requireViewById<TabLayout>(R.id.glass_tabs)
+        val pages = Page.entries.associateWith { requireViewById<View>(it.view) }
+        for (item in Page.entries) {
+            tabs.addTab(tabs.newTab().setText(item.title), false)
+        }
+        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                page = Page.entries[tab.position]
+                for ((item, view) in pages) {
+                    view.visibility = if (item == page) View.VISIBLE else View.GONE
+                }
+                if (page == Page.TARGETS) updateSystemAppScope(request = false)
+            }
+
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
+        })
+        tabs.getTabAt(initialPage.ordinal)?.select()
+    }
+
+    private fun bindAppearanceAndTargets(prefs: SharedPreferences, supported: Boolean) {
+        val master = requireViewById<MaterialSwitch>(R.id.glass_enabled).apply {
+            isChecked = prefs.getBoolean("enabled", true)
+        }
+        val switches = TargetOption.entries.associateWith { target ->
+            requireViewById<MaterialSwitch>(target.control).apply {
+                isChecked = if (target == TargetOption.LOCK_SCREEN) GlassAppearance.lockScreenEnabled(prefs)
+                    else prefs.getBoolean(target.key, false)
+                isEnabled = target == TargetOption.CAPTURE || GlassTargets.supportsSystemGlass() || !supported
             }
         }
+        val systemApps = requireViewById<MaterialSwitch>(R.id.glass_system_apps)
+        systemApps.isChecked = prefs.getBoolean(ApplicationGlassConfig.SYSTEM_SWITCH, true)
         scopeStatus = requireViewById(R.id.glass_system_app_scope_status)
         requireViewById<View>(R.id.glass_system_app_scope).setOnClickListener {
             updateSystemAppScope(request = true)
         }
-        val capture = requireViewById<MaterialSwitch>(R.id.glass_capture)
-        master.isChecked = prefs.getBoolean("enabled", true)
-        capture.isChecked = prefs.getBoolean(GlassTargets.CAPTURE_SETTING, false)
+        requireViewById<TextView>(R.id.glass_preview_notice).apply {
+            visibility = if (supported) View.GONE else View.VISIBLE
+            setText(R.string.glass_settings_preview_only)
+        }
+
         val preview = requireViewById<GlassPreview>(R.id.glass_preview)
-        val quick = requireViewById<MaterialSwitch>(R.id.glass_quick)
-        val notifications = requireViewById<MaterialSwitch>(R.id.glass_notifications)
-        val volume = requireViewById<MaterialSwitch>(R.id.glass_volume)
-        val systemSurfaces = requireViewById<MaterialSwitch>(R.id.glass_system_surfaces)
-        val lockScreen = requireViewById<MaterialSwitch>(R.id.glass_lock_screen)
-        val home = requireViewById<MaterialSwitch>(R.id.glass_home)
-        val slider = requireViewById<Slider>(R.id.glass_strength)
-        val value = requireViewById<TextView>(R.id.glass_value)
-        val tintSlider = requireViewById<Slider>(R.id.glass_tint)
-        val tintValue = requireViewById<TextView>(R.id.glass_tint_value)
-        val supported = GlassTargets.supportsCaptureGlass()
+        val strength = requireViewById<Slider>(R.id.glass_strength)
+        val strengthLabel = requireViewById<TextView>(R.id.glass_value)
+        val tint = requireViewById<Slider>(R.id.glass_tint)
+        val tintLabel = requireViewById<TextView>(R.id.glass_tint_value)
+        val savedStrength = prefs.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH).coerceIn(0, 100)
+        if (savedStrength % 5 != 0) strength.stepSize = 1f
+        strength.value = savedStrength.toFloat()
+        tint.value = GlassAppearance.tintPercent(
+            prefs.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT),
+        ).toFloat()
+
+        val targetNotice = requireViewById<TextView>(R.id.glass_targets_notice)
+        val statuses = TargetOption.entries.associateWith { requireViewById<TextView>(it.status) }
+        fun displayStatus() {
+            targetNotice.visibility = if (!master.isChecked) View.VISIBLE else View.GONE
+            targetNotice.setText(R.string.glass_settings_master_off_notice)
+            if (!supported) return
+            val currentBoot = Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, -1)
+            for ((target, control) in switches) {
+                val status = statuses.getValue(target)
+                if (!master.isChecked || !control.isChecked || !control.isEnabled || strength.value <= 0f) {
+                    status.visibility = View.GONE
+                    continue
+                }
+                status.setText(targetState(target.statusKey, currentBoot))
+                status.visibility = View.VISIBLE
+            }
+        }
+        refreshTargetStates = ::displayStatus
+        if (supported) {
+            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> displayStatus() }
+            stateListener = listener
+            statePrefs.registerOnSharedPreferenceChangeListener(listener)
+        }
+
+        fun updatePreview() {
+            val showGlass = master.isChecked
+            preview.appearance = GlassAppearance(
+                quick = showGlass,
+                notifications = showGlass,
+                home = showGlass,
+                strength = strength.value.toInt(),
+                tint = tint.value.toInt(),
+                volume = showGlass,
+                volumeTheme = prefs.getInt("volume", 0),
+                systemSurfaces = showGlass,
+            )
+            strengthLabel.text = getString(R.string.qs_percent, strength.value.toInt())
+            tintLabel.text = getString(R.string.qs_percent, tint.value.toInt())
+            displayStatus()
+        }
+
+        fun publishAppearance() {
+            if (supported) contentResolver.notifyChange(ConfigProvider.URI, null)
+            FrameworkServiceConnection.publishApplicationGlassConfig(this)
+        }
+
+        master.setOnCheckedChangeListener { _, enabled ->
+            prefs.edit().putBoolean("enabled", enabled).apply()
+            updatePreview()
+            publishAppearance()
+        }
+        for ((target, switch) in switches) {
+            switch.setOnCheckedChangeListener { _, enabled ->
+                if (supported) prefs.edit().putBoolean(target.key, enabled).apply()
+                displayStatus()
+                publishAppearance()
+            }
+        }
+        systemApps.setOnCheckedChangeListener { _, enabled ->
+            prefs.edit().putBoolean(ApplicationGlassConfig.SYSTEM_SWITCH, enabled).apply()
+            FrameworkServiceConnection.publishApplicationGlassConfig(this)
+        }
+
+        fun bindSlider(control: Slider, key: String) {
+            val publish = Runnable { publishAppearance() }
+            control.addOnChangeListener { _, position, fromUser ->
+                if (fromUser) {
+                    prefs.edit().putInt(key, position.toInt()).apply()
+                    control.removeCallbacks(publish)
+                    control.postDelayed(publish, 80L)
+                }
+                updatePreview()
+            }
+        }
+        bindSlider(strength, GlassAppearance.STRENGTH)
+        bindSlider(tint, GlassAppearance.TINT)
+        updatePreview()
+    }
+
+    @StringRes
+    private fun targetState(key: String, boot: Int): Int {
+        if (!matchesCurrentHost(key, boot)) return R.string.glass_state_reload
+        return when (statePrefs.getString("$key.state", "")) {
+            "DRAWN" -> R.string.glass_state_drawn
+            "UNSUPPORTED", "CRASH_GUARD" -> R.string.glass_state_error
+            else -> R.string.glass_state_pending
+        }
+    }
+
+    private fun matchesCurrentHost(key: String, boot: Int): Boolean {
+        val version = statePrefs.getInt("$key.version", 0)
+        return hostVersionMatches(version) && statePrefs.getInt("$key.boot", -2) == boot
+    }
+
+    private fun bindManagement(supported: Boolean) {
         requireViewById<TextView>(R.id.glass_requirements).setText(
             when {
                 !supported -> R.string.glass_preview_only
@@ -86,100 +250,14 @@ class GlassActivity : AppCompatActivity() {
                 else -> R.string.glass_requirements
             },
         )
-        quick.isChecked = prefs.getBoolean(GlassAppearance.QUICK, false)
-        notifications.isChecked = prefs.getBoolean(GlassAppearance.NOTIFICATIONS, false)
-        volume.isChecked = prefs.getBoolean(GlassAppearance.VOLUME, false)
-        systemSurfaces.isChecked = prefs.getBoolean(GlassAppearance.SYSTEM_SURFACES, false)
-        lockScreen.isChecked = GlassAppearance.lockScreenEnabled(prefs)
-        home.isChecked = prefs.getBoolean(GlassAppearance.HOME, false)
-        slider.value = prefs.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH).coerceIn(0, 100).toFloat()
-        tintSlider.value = GlassAppearance.tintPercent(
-            prefs.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT),
-        ).toFloat()
-        val status = requireViewById<TextView>(R.id.glass_live_status)
-        for (control in listOf(quick, notifications, volume, systemSurfaces, lockScreen, home)) {
-            control.isEnabled = GlassTargets.supportsSystemGlass() || !supported
-        }
-        statePrefs = getSharedPreferences("host_status", Context.MODE_PRIVATE)
         if (supported) requireViewById<View>(R.id.glass_surface_diagnostics).apply {
             visibility = View.VISIBLE
             setOnClickListener { showSurfaceDiagnostics() }
         }
-        fun displayStatus() {
-            if (!supported) return
-            val currentBoot = Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, -1)
-            val states = requireNotNull(statePrefs)
-            fun state(key: String, enabled: Boolean): Int {
-                if (!enabled || slider.value <= 0f) return R.string.glass_state_off
-                if (!master.isChecked) return R.string.glass_state_master_off
-                if (states.getInt("$key.version", 0) != BuildConfig.VERSION_CODE ||
-                    states.getInt("$key.boot", -2) != currentBoot) return R.string.glass_state_reload
-                return when (states.getString("$key.state", "")) {
-                    "DRAWN" -> R.string.glass_state_drawn
-                    "UNSUPPORTED", "CRASH_GUARD" -> R.string.glass_state_error
-                    else -> R.string.glass_state_pending
-                }
-            }
-
-            val rows = listOf(
-                R.string.glass_quick to state("com.android.systemui.glass_quick", quick.isChecked),
-                R.string.glass_notifications to state("com.android.systemui.glass_notifications", notifications.isChecked),
-                R.string.glass_volume to state("com.android.systemui.glass_volume", volume.isChecked),
-                R.string.glass_system_surfaces to state("com.android.systemui.glass_system_surfaces", systemSurfaces.isChecked),
-                R.string.glass_lock_screen to state("com.android.systemui.glass_lock_screen", lockScreen.isChecked),
-                R.string.glass_home to state("com.sec.android.app.launcher.glass_home", home.isChecked),
-                R.string.glass_capture to state("${GlassTargets.CAPTURE}.${GlassTargets.CAPTURE_SETTING}", capture.isChecked),
-            )
-            status.visibility = View.VISIBLE
-            status.text = rows.joinToString("\n") { (name, result) -> getString(R.string.glass_status_line, getString(name), getString(result)) }
+        requireViewById<View>(R.id.glass_licenses).setOnClickListener {
+            startActivity(Intent(this, LicensesActivity::class.java))
         }
-        if (supported) {
-            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> displayStatus() }
-            stateListener = listener
-            statePrefs?.registerOnSharedPreferenceChangeListener(listener)
-        }
-        fun display() {
-            val strength = slider.value.toInt()
-            val tint = GlassAppearance.tintPercent(tintSlider.value.toInt())
-            preview.appearance = GlassAppearance(
-                quick = quick.isChecked, notifications = notifications.isChecked, home = home.isChecked,
-                strength = strength, tint = tint, volume = volume.isChecked,
-                volumeTheme = prefs.getInt("volume", 0),
-                systemSurfaces = systemSurfaces.isChecked,
-                lockScreen = lockScreen.isChecked,
-            )
-            value.text = getString(R.string.qs_percent, strength)
-            tintValue.text = getString(R.string.qs_percent, tint)
-            displayStatus()
-        }
-        fun changed() {
-            if (supported) contentResolver.notifyChange(ConfigProvider.URI, null)
-            FrameworkServiceConnection.publishApplicationGlassConfig(this)
-        }
-        for ((control, key) in listOf(quick to GlassAppearance.QUICK,
-                   notifications to GlassAppearance.NOTIFICATIONS, volume to GlassAppearance.VOLUME,
-                   systemSurfaces to GlassAppearance.SYSTEM_SURFACES, lockScreen to GlassAppearance.LOCK_SCREEN,
-                   home to GlassAppearance.HOME, master to "enabled", capture to GlassTargets.CAPTURE_SETTING)) {
-            control.setOnCheckedChangeListener { _, enabled ->
-                if (supported || control === master) prefs.edit().putBoolean(key, enabled).apply()
-                display()
-                changed()
-            }
-        }
-        fun bindSlider(control: Slider, key: String) {
-            val notifyHosts = Runnable { changed() }
-            control.addOnChangeListener { _, position, fromUser ->
-                if (fromUser) {
-                    prefs.edit().putInt(key, position.toInt()).apply()
-                    control.removeCallbacks(notifyHosts)
-                    control.postDelayed(notifyHosts, 80L)
-                }
-                display()
-            }
-        }
-        bindSlider(slider, GlassAppearance.STRENGTH)
-        bindSlider(tintSlider, GlassAppearance.TINT)
-        display()
+        bindReloadButtons()
     }
 
     private fun updateSystemAppScope(request: Boolean) {
@@ -224,15 +302,15 @@ class GlassActivity : AppCompatActivity() {
                         }
                     }) {
                     buttons.values.forEach { it.isEnabled = false }
+                    status.setText(R.string.glass_reload_working)
                 }
-                status.setText(R.string.glass_reload_working)
             }
         }
     }
 
     private fun showSurfaceDiagnostics() {
         val boot = Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, -1)
-        val snapshot = requireNotNull(statePrefs).all
+        val snapshot = statePrefs.all
         val rows = snapshot.keys.asSequence()
             .filter { it.endsWith(".state") }
             .mapNotNull { key ->
@@ -242,7 +320,8 @@ class GlassActivity : AppCompatActivity() {
                     base.startsWith(GlassSurfaceStage.HOME_STATUS_PREFIX) -> GlassSurfaceStage.HOME_STATUS_PREFIX
                     else -> return@mapNotNull null
                 }
-                if (snapshot["$base.boot"] != boot || snapshot["$base.version"] != BuildConfig.VERSION_CODE) return@mapNotNull null
+                if (snapshot["$base.boot"] != boot ||
+                    !hostVersionMatches(snapshot["$base.version"] as? Int ?: 0)) return@mapNotNull null
                 val stage = GlassSurfaceStage.entries.firstOrNull { it.name == snapshot[key] } ?: return@mapNotNull null
                 val name = base.removePrefix(prefix)
                 val label = when (name) {
@@ -263,5 +342,13 @@ class GlassActivity : AppCompatActivity() {
         if (rows.isEmpty()) dialog.setMessage(R.string.glass_surface_diagnostics_empty)
         else dialog.setItems(rows.toTypedArray(), null)
         dialog.show()
+    }
+
+    private companion object {
+        const val STATE_PAGE = "settings_page"
+
+        // 0.4.4 changes only the manager UI. The hooks and status format match 0.4.3.
+        fun hostVersionMatches(version: Int): Boolean =
+            version == BuildConfig.VERSION_CODE || (BuildConfig.VERSION_CODE == 25 && version == 24)
     }
 }
