@@ -62,6 +62,7 @@ internal class GlassLauncherControls(
         OVERLAY_SEARCH("overlay_apps_search"), HOME_FINDER("home_finder"), HOME_LAYOUT_TIP("home_layout_tip"),
         MULTI_SELECT_ACTION("multi_select_action"), WIDGET_STACK_ADD("widget_stack_add"), LARGE_FOLDER("large_folder"),
         PAGE_EDIT("home_page_edit"), PICKER_SELECTION("folder_picker_selection"), DRAG_GUIDE("drawer_drag_guide"),
+        WIDGET_PICKER_SEARCH("widget_picker_search"), FOLDER_TASKBAR_DIALOG("folder_taskbar_dialog"),
     }
 
     private data class PlateAnchor(val viewId: Int, val role: Role, val parent: Boolean = false)
@@ -107,8 +108,8 @@ internal class GlassLauncherControls(
         add("drag_guide_top_panel", "drag_guide_top_container", Role.DRAG_GUIDE)
         add("drag_guide_bottom_panel", "drag_guide_bottom_container", Role.DRAG_GUIDE)
         add("selected_header_view", null, Role.PICKER_SELECTION)
-        add("widget_list_view", "list_recycler_view", Role.WIDGET_PICKER)
-        add("widget_list_view_tablet", "widget_container", Role.WIDGET_PICKER)
+        add("widget_list_view", "searchViewContainer", Role.WIDGET_PICKER_SEARCH)
+        add("widget_list_view", "sesl_search_bar", Role.WIDGET_PICKER_SEARCH)
         add("widget_search_bar", "search_edit", Role.WIDGET_SEARCH, parent = true)
         add("stacked_widget_edit_container", "stacked_widget_edit_view_pager", Role.WIDGET_STACK_EDITOR)
         add("folder_setting_container", "folder_color_setting_container", Role.FOLDER_STYLE)
@@ -124,6 +125,7 @@ internal class GlassLauncherControls(
         add("overlay_apps_sip_search_bar", "app_sip_search_edit_text", Role.OVERLAY_SEARCH, parent = true)
         add("folder_setting_title", "title", Role.FOLDER_STYLE)
         add("folder_setting_container", "preview_folder_layout", Role.FOLDER_STYLE)
+        add("delete_folder_dialog_from_taskbar", null, Role.FOLDER_TASKBAR_DIALOG)
         add("stacked_widget_edit_plus_page", "stacked_widget_add_button", Role.WIDGET_STACK_ADD)
         for (button in listOf("uninstall", "remove_shortcut", "create_folder", "cancel")) {
             add("multi_select_panel", "multi_select_${button}_button", Role.MULTI_SELECT_ACTION)
@@ -141,6 +143,7 @@ internal class GlassLauncherControls(
 
     init {
         install("quick_options") { hookQuickOptions(loader) }
+        install("widget_picker") { hookWidgetListBackground(loader) }
         install("drawer_profile_indicator") { hookTabIndicator(loader) }
         install("launcher_plates") { hookLauncherPlates() }
         install("drawer_search_binding") { hookDrawerSearchBinding(loader) }
@@ -197,6 +200,48 @@ internal class GlassLauncherControls(
         val popup = parent ?: return false
         val access = quickOptionAccess(popup)
         return access.isFolder.invoke(access.anchor.invoke(popup)) == true
+    }
+
+    private fun hookWidgetListBackground(loader: ClassLoader) {
+        val list = DexSymbols.findClass(
+            "com.honeyspace.ui.honeypots.widgetlist.presentation.ListRecyclerView", false, loader,
+        )
+        val type = list.getMethod("getWidgetListBackground").returnType.asSubclass(Drawable::class.java)
+        val fill = type.declaredFields.single { Drawable::class.java.isAssignableFrom(it.type) }
+            .apply { isAccessible = true }
+        val outline = Outline()
+        val bounds = Rect()
+        val radii = FloatArray(8)
+        val draw = type.getDeclaredMethod("draw", Canvas::class.java)
+        ModernHook.aroundMethod(draw) { chain ->
+            val drawable = chain.thisObject as Drawable
+            val host = drawable.callback as? View ?: return@aroundMethod chain.proceed()
+            val strength = visibleStrength(host, Role.WIDGET_PICKER)
+            val canvas = chain.args[0] as Canvas
+            if (strength <= 0 || !canvas.isHardwareAccelerated) return@aroundMethod chain.proceed()
+            val stock = fill.get(drawable) as? Drawable ?: return@aroundMethod chain.proceed()
+            val alpha = stock.alpha
+            val result = try {
+                stock.alpha = (alpha * (1f - 0.005f * strength)).roundToInt()
+                chain.proceed()
+            } finally {
+                stock.alpha = alpha
+            }
+            safely {
+                // Samsung moves this inner plate with the first visible row, below recommendations.
+                bounds.set(stock.bounds)
+                if (bounds.isEmpty || !bounds.intersect(drawable.bounds)) return@safely
+                outline.setEmpty()
+                stock.getOutline(outline)
+                val radius = outline.radius.takeIf { it > 0f } ?: 24f * host.resources.displayMetrics.density
+                radii.fill(radius)
+                material.drawSurface(canvas, bounds.left.toFloat(), bounds.top.toFloat(), bounds.right.toFloat(),
+                    bounds.bottom.toFloat(), radii, strength, dark(), fill = true, rim = true,
+                    profile = GlassMaterial.Profile.SYSTEM_SURFACE)
+                didDraw(Role.WIDGET_PICKER)
+            }
+            result
+        }
     }
 
     private fun spaceBeforeTitleButton(header: LinearLayout, label: TextView): Int {
@@ -618,7 +663,7 @@ internal class GlassLauncherControls(
                     if (strength <= 0) restoreTint() else styleTint(host, strength)
                     updateFolderTitle(host, strength)
                 }
-                Role.SEARCH, Role.FINDER_INPUT, Role.WIDGET_SEARCH, Role.OVERLAY_SEARCH ->
+                Role.SEARCH, Role.FINDER_INPUT, Role.WIDGET_SEARCH, Role.WIDGET_PICKER_SEARCH, Role.OVERLAY_SEARCH ->
                     effect?.update(host, strength, 30, boundedPlate = true)
                 Role.TASKBAR -> effect?.update(host, strength, 12, boundedPlate = true)
                 Role.LARGE_FOLDER -> {

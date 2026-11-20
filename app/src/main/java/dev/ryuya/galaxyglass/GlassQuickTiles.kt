@@ -31,6 +31,7 @@ internal class GlassQuickTiles(
         CARD(GlassMaterial.Profile.QUICK_CONTROL),
         GRID(GlassMaterial.Profile.QUICK_GROUP),
         SLIDER(GlassMaterial.Profile.QUICK_SLIDER),
+        SIM_BAR(GlassMaterial.Profile.QUICK_GROUP),
         EDITOR(GlassMaterial.Profile.SYSTEM_SURFACE),
     }
     private data class Clip(val surface: Surface, val nativeShape: Any)
@@ -278,6 +279,19 @@ internal class GlassQuickTiles(
         require(box.parameterTypes[0] == modifier && box.parameterTypes[4] == Long::class.javaPrimitiveType)
         require(box.parameterTypes[8] == Int::class.javaPrimitiveType)
         val nativeSurface = ThreadLocal<Surface>()
+        fun hookRenderer(renderer: Method, surface: Surface): ModernHook.Handle {
+            ModernHook.deoptimize(renderer)
+            return ModernHook.aroundMethod(renderer) { chain ->
+                if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
+                val previous = nativeSurface.get()
+                nativeSurface.set(surface)
+                try {
+                    chain.proceed()
+                } finally {
+                    if (previous == null) nativeSurface.remove() else nativeSurface.set(previous)
+                }
+            }
+        }
         val handles = mutableListOf<ModernHook.Handle>()
         try {
             handles += ModernHook.aroundMethod(clip) { chain ->
@@ -292,7 +306,10 @@ internal class GlassQuickTiles(
             }
             handles += ModernHook.aroundMethod(box) { chain ->
                 val nativeShape = chain.args[5]
-                if (nativeSurface.get() != Surface.CARD || !rounded.isInstance(nativeShape)) return@aroundMethod chain.proceed()
+                val surface = nativeSurface.get()
+                if ((surface != Surface.CARD && surface != Surface.SIM_BAR) || !rounded.isInstance(nativeShape)) {
+                    return@aroundMethod chain.proceed()
+                }
                 val args = chain.args.toTypedArray()
                 val stockColor = args[4] as Long
                 // sRGB Compose Color stores ARGB in the upper word. Leave the invisible one-cell placeholder alone.
@@ -301,28 +318,23 @@ internal class GlassQuickTiles(
                 val glassAlpha = (alpha * (1f - 0.70f * level() / 100f)).toInt().coerceIn(0, 255)
                 args[3] = 0L // The glass has its own rim. Suppress this card's stock outline.
                 args[4] = (stockColor and 0x00ffffffffffffffL) or (glassAlpha.toLong() shl 56)
-                args[0] = then.invoke(args[0], overlay(Surface.CARD, requireNotNull(nativeShape)))
+                args[0] = then.invoke(args[0], overlay(surface, requireNotNull(nativeShape)))
                 args[8] = (args[8] as Int) or 1
                 nativeSurface.remove()
                 chain.proceed(args)
             }
             for ((renderer, surface) in listOf(grid to Surface.GRID, bars to Surface.SLIDER, iconText to Surface.CARD)) {
-                ModernHook.deoptimize(renderer)
-                handles += ModernHook.aroundMethod(renderer) { chain ->
-                    if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
-                    val previous = nativeSurface.get()
-                    nativeSurface.set(surface)
-                    try {
-                        chain.proceed()
-                    } finally {
-                        if (previous == null) nativeSurface.remove() else nativeSurface.set(previous)
-                    }
-                }
+                handles += hookRenderer(renderer, surface)
             }
         } catch (error: Throwable) {
             handles.asReversed().forEach { it.unhook() }
             throw error
         }
+        runCatching {
+            // BoxWithConstraints subcomposes Samsung's SIM bar after the entry function returns.
+            val renderer = method(tiles + "MultiSIMPreferredBarKt\$\$ExternalSyntheticLambda5", "invoke", 3)
+            hookRenderer(renderer, Surface.SIM_BAR)
+        }.onFailure { HookEntry.log("GLASS_QUICK_SIM_BAR_UNAVAILABLE ${it.javaClass.simpleName}") }
     }
 
     fun refresh() {

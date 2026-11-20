@@ -15,6 +15,7 @@ import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.Window
 import android.view.WindowManager
 import android.widget.ListPopupWindow
@@ -368,6 +369,10 @@ internal class GlassSystemSurfaces(
                 val spec = known[layout] ?: continue
                 find(id)?.let { observe(it, spec) }
             }
+            for ((layout, id) in EXISTING_PANEL_PLATES) {
+                val spec = known[layout] ?: continue
+                find(id)?.let { observe(it, spec) }
+            }
             find("qs_detail_container")?.let { view ->
                 known["sec_qs_detail_container"]?.let { observe(view, it) }
             }
@@ -395,23 +400,41 @@ internal class GlassSystemSurfaces(
     }
 
     private inner class Scope(root: View, val spec: GlassSystemCatalog.Surface) :
-        View.OnAttachStateChangeListener, View.OnLayoutChangeListener {
+        View.OnAttachStateChangeListener, View.OnLayoutChangeListener, ViewTreeObserver.OnPreDrawListener {
         val view = WeakReference(root)
         private val effects = WeakHashMap<View, GlassSystemSurfaceEffect>()
         private val blur = DialogBlur()
         private val notificationEffect by lazy { GlassSystemSurfaceEffect(material, false) }
         private var notificationStage = GlassSurfaceStage.FOUND
+        private var panelObserver: ViewTreeObserver? = null
+        private var panelStrength = -1
 
         override fun onViewAttachedToWindow(view: View) {
             if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) notificationPlates[view] = Unit
             view.addOnLayoutChangeListener(this)
+            if (spec.name in EXISTING_PANEL_PLATES) {
+                panelObserver = view.viewTreeObserver.also { it.addOnPreDrawListener(this) }
+            }
             OneShotPreDrawListener.add(view, ::refresh)
         }
 
         override fun onViewDetachedFromWindow(view: View) {
             if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) notificationPlates.remove(view)
             view.removeOnLayoutChangeListener(this)
+            panelObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(this)
+            panelObserver = null
+            panelStrength = -1
             restore()
+        }
+
+        override fun onPreDraw(): Boolean {
+            val root = view.get() ?: return true
+            val current = visibleStrength(root)
+            if (current != panelStrength) {
+                panelStrength = current
+                refresh()
+            }
+            return true
         }
 
         override fun onLayoutChange(
@@ -577,6 +600,10 @@ internal class GlassSystemSurfaces(
             "keyguard_sec_affordance_view_left" to "left_shortcut_area",
             "keyguard_sec_affordance_view_right" to "right_shortcut_area",
             "ongoing_nowbar_view" to "ongoing_activity_nowbar_view",
+        )
+        val EXISTING_PANEL_PLATES = mapOf(
+            "status_bar_notification_dnd_status" to "notification_dnd_status_text_icon_container",
+            "qs_panel_multi_sim_preffered_slot" to "qs_multi_sim_preffered_slot",
         )
         val EXISTING_CHIPS = listOf("ongoing_activity_chip_content", "sec_ongoing_activity_chip_item",
             "samsung_ongoing_call_chip", "samsung_ongoing_cast_chip")
