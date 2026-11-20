@@ -204,6 +204,18 @@ internal class GlassLauncherControls(
 
     private fun id(name: String) = resources.getIdentifier(name, "id", launcher)
 
+    private fun ownsResource(owner: Resources, id: Int): Boolean =
+        id > 0 && (owner === resources || runCatching { owner.getResourcePackageName(id) }.getOrNull() == launcher)
+
+    private fun isWidgetContent(view: View): Boolean {
+        var parent: View? = view
+        while (parent != null) {
+            if (isHomeWidgetBoundary(parent)) return true
+            parent = parent.parent as? View
+        }
+        return false
+    }
+
     private fun install(name: String, add: () -> Unit) {
         runCatching(add).onFailure { HookEntry.log("GLASS_HOME_CONTROL_UNAVAILABLE $name ${it.javaClass.simpleName}") }
     }
@@ -258,6 +270,7 @@ internal class GlassLauncherControls(
         ModernHook.aroundMethod(draw) { chain ->
             val drawable = chain.thisObject as Drawable
             val host = drawable.callback as? View ?: return@aroundMethod chain.proceed()
+            if (!list.isInstance(host) || isWidgetContent(host)) return@aroundMethod chain.proceed()
             val strength = visibleStrength(host, Role.WIDGET_PICKER)
             val canvas = chain.args[0] as Canvas
             if (strength <= 0 || !canvas.isHardwareAccelerated) return@aroundMethod chain.proceed()
@@ -374,6 +387,8 @@ internal class GlassLauncherControls(
             val layout = chain.args[0] as Int
             val plates = nativePlates[layout]
             if (plates == null && layout !in layouts) return@aroundMethod chain.proceed()
+            val inflater = chain.thisObject as LayoutInflater
+            if (!ownsResource(inflater.context.resources, layout)) return@aroundMethod chain.proceed()
             val parent = chain.args[1] as? ViewGroup
             val firstChild = parent?.childCount ?: 0
             val result = chain.proceed()
@@ -443,8 +458,10 @@ internal class GlassLauncherControls(
         }
         val capture = ModernHook.aroundMethod(load) { chain ->
             val result = chain.proceed()
-            val role = plateResources[chain.args[0] as Int]
-            if (role != null && main.isCurrentThread && result is Drawable) pending[result] = role
+            val resourceId = chain.args[0] as Int
+            val role = plateResources[resourceId]
+            if (role != null && main.isCurrentThread && result is Drawable &&
+                ownsResource(chain.thisObject as Resources, resourceId)) pending[result] = role
             result
         }
         try {
@@ -454,6 +471,7 @@ internal class GlassLauncherControls(
                 if (stock != null && main.isCurrentThread) {
                     val view = chain.thisObject as View
                     val nativeInput = finderBackgroundId != 0 && view.id == finderBackgroundId &&
+                        ownsResource(view.resources, view.id) &&
                         (stock is ColorDrawable || stock is GradientDrawable || stock is InsetDrawable)
                     val role = if (nativeInput) Role.FINDER_INPUT else pending[stock]
                     if (role != null) safely { refresh(view, role) }
@@ -546,6 +564,7 @@ internal class GlassLauncherControls(
 
     /** Also recognises controls which were inflated before the module became ready. */
     fun find(view: View) {
+        if (view.id != View.NO_ID && !ownsResource(view.resources, view.id)) return
         if (tabIndicator?.isInstance(view) == true) findProfileIndicator(view)
         findLargeFolder?.invoke(view)
         if (pageActionsId != 0 && view.id == pageActionsId && view is ViewGroup) watchPageActions(view)
@@ -652,7 +671,7 @@ internal class GlassLauncherControls(
             main.post { safely { watch(view, role) } }
             return
         }
-        if (views.containsKey(view)) return
+        if (views.containsKey(view) || isWidgetContent(view)) return
         val binding = Binding(view, role)
         views[view] = binding
         onSurface(role.tag, GlassSurfaceStage.FOUND)
@@ -730,7 +749,7 @@ internal class GlassLauncherControls(
 
         fun refresh() = safely {
             val host = view.get() ?: return@safely
-            val strength = visibleStrength(host, role)
+            val strength = if (isWidgetContent(host)) 0 else visibleStrength(host, role)
             when (role) {
                 Role.MENU -> if (strength <= 0) restoreMenu(host) else {
                     attachMenu(host)

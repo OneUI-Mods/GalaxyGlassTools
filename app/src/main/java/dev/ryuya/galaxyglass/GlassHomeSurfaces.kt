@@ -50,6 +50,7 @@ internal class GlassHomeSurfaces(
     fun find(root: View) = safely { scan(root) }
 
     private fun scan(root: View) {
+        if (isHomeWidgetBoundary(root)) return
         if (root.javaClass == container) dock.watch(root as ViewGroup)
         folderBackdrop?.find(root)
         controls.find(root)
@@ -76,3 +77,8 @@ internal class GlassHomeSurfaces(
     }
 
 }
+
+/** The workspace allocates a cell to these views, which can contain transparent areas. */
+internal fun isHomeWidgetBoundary(view: View): Boolean = view is android.appwidget.AppWidgetHostView ||
+    view.javaClass.name == "com.honeyspace.ui.common.widget.WidgetHostViewContainer" ||
+    view.javaClass.name == "com.honeyspace.ui.honeypots.stackedwidget.presentation.StackedWidgetContainer"
