@@ -148,6 +148,8 @@ internal object GlassSystemCatalog {
         roundedPlate("controls_with_favorites", 24, "controls_scroll_view", "controls_panel"),
         root("controls_base_item", 18),
         Layout("sec_controls_base_item", listOf(Anchor(null, 22, keepFill = true))),
+        Layout("controls_d2d_base_item", listOf(Anchor(null, 22, keepFill = true))),
+        Layout("dream_overlay_media_entry_chip", listOf(Anchor("media_entry_chip", keepFill = true))),
         roundedPlate("hearing_device_ambient_volume_layout", 24, "ambient_expand_icon"),
         roundedPlate("basic_panel_layout", 24, "brightness_volume_view", "gridView"),
         roundedPlate("flex_media_panel_layout", 24, "brightness_volume_view", "gridView"),
@@ -163,6 +165,7 @@ internal object GlassSystemCatalog {
 
         // Window-management controls. These never select a hosted app surface.
         root("bubble_manage_menu"),
+        Layout("bubble_bar_drop_target", listOf(Anchor("bubble_bar_drop_target", keepFill = true))),
         plate("bubble_bar_menu_view", "bubble_bar_manage_menu_bubble_section", "bubble_bar_manage_menu_actions_section"),
         root("bubble_overflow_view", 24),
         root("sec_bubble_overflow_view", 24),

@@ -26,6 +26,8 @@ The module keeps the original drawable instance for native plates. When its outl
 
 The additional surfaces do not start a capture. Media cards and groups in the notification panel reuse the existing shade source when it is available. The lens is drawn before the controls, with lighter blending over album artwork. Secure windows and authentication prompts keep their stock rendering, and the lock-screen scope covers notification cards and shortcut chrome while the screen is interactive. Reduce transparency disables this group and restores the previous drawable state. The SystemUI screenshot, foreground services and multi-window helper processes each have an independent crash guard. Galaxy Glass Tools also styles Samsung Capture's own screenshot and recording toolbars. Screenshot image previews, camera content, PiP video and app content hosted in bubbles are outside the glass plates.
 
+The BZI9 resource inventory also covers the drawer drag guides, device-to-device control cards, the bubble drop target, the screen saver media button, the capture brush settings panel and the text extraction help bubble.
+
 The bevel combines a wide highlight, a shaded inner edge and a soft reflection across the face. It follows the native contour and uses different lighting in light and dark mode. The power-menu version uses a narrower bevel inside each icon's circle and keeps Samsung's action colors and symbols visible.
 
 ## iOS 27 reference

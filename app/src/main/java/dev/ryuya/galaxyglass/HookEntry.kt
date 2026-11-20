@@ -48,9 +48,13 @@ class HookEntry : XposedModule() {
                             GlassAppearance.HOME else GlassAppearance.SYSTEM_SURFACES, "CRASH_GUARD", "", BuildConfig.VERSION_CODE)
                     } else {
                         if (capture) GlassCaptureHost(app, param.classLoader).start()
-                        else GlassHost(app, param.classLoader, activity,
-                            briefOnly = process == "$SYSTEM_UI:edgelighting",
-                            systemSurfacesOnly = helper && process != "$SYSTEM_UI:edgelighting").start()
+                        else DexSymbols.whenPrepared(app) {
+                            runCatching {
+                                GlassHost(app, param.classLoader, activity?.takeUnless { it.isDestroyed },
+                                    briefOnly = process == "$SYSTEM_UI:edgelighting",
+                                    systemSurfacesOnly = helper && process != "$SYSTEM_UI:edgelighting").start()
+                            }.onFailure { log("Glass host unavailable: ${it.javaClass.simpleName} ${it.message}") }
+                        }
                         Handler(Looper.getMainLooper()).postDelayed({ guard.healthy() }, 90_000)
                     }
                 }.onFailure { log("Glass startup unavailable: ${it.javaClass.simpleName} ${it.message}") }

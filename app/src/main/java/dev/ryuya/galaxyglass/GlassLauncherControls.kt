@@ -56,7 +56,7 @@ internal class GlassLauncherControls(
         DEX_CONTEXT_MENU("dex_context_menu"), DEX_WELLBEING("dex_wellbeing"), TASKBAR("taskbar"),
         OVERLAY_SEARCH("overlay_apps_search"), HOME_FINDER("home_finder"), HOME_LAYOUT_TIP("home_layout_tip"),
         MULTI_SELECT_ACTION("multi_select_action"), WIDGET_STACK_ADD("widget_stack_add"), LARGE_FOLDER("large_folder"),
-        PAGE_EDIT("home_page_edit"), PICKER_SELECTION("folder_picker_selection"),
+        PAGE_EDIT("home_page_edit"), PICKER_SELECTION("folder_picker_selection"), DRAG_GUIDE("drawer_drag_guide"),
     }
 
     private data class PlateAnchor(val viewId: Int, val role: Role, val parent: Boolean = false)
@@ -93,6 +93,8 @@ internal class GlassLauncherControls(
         add("quickoption_container", "quickoption_container", Role.MENU)
         add("task_menu_layout", "content", Role.RECENTS_TASK_MENU)
         add("page_edit_panel", "page_edit_panel", Role.PAGE_EDIT)
+        add("drag_guide_top_panel", "drag_guide_top_container", Role.DRAG_GUIDE)
+        add("drag_guide_bottom_panel", "drag_guide_bottom_container", Role.DRAG_GUIDE)
         add("selected_header_view", null, Role.PICKER_SELECTION)
         add("widget_list_view", "list_recycler_view", Role.WIDGET_PICKER)
         add("widget_list_view_tablet", "widget_container", Role.WIDGET_PICKER)

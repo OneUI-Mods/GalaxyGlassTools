@@ -22,11 +22,7 @@ class DexKitProvider : ContentProvider() {
     }
 
     private fun catalog(): JSONObject =
-        DexKitProvider::class
-            .java
-            .classLoader!!
-            .getResourceAsStream("oneui-dexkit-profiles.json")!!
-            .bufferedReader()
+        requireNotNull(context).assets.open("oneui-dexkit-profiles.json").bufferedReader()
             .use { JSONObject(it.readText()) }
 
     private fun identity(pkg: String): Pair<String, List<File>>? =

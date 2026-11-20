@@ -6,7 +6,7 @@ internal object DexKitConfig {
     val MODULE_VERSION
         get() = dev.ryuya.galaxyglass.BuildConfig.VERSION_CODE
 
-    const val PROFILE_HASH = "ea9838826a2b31edafd21ca06b6e8fe93ea404c05033c4f87c03149df9d42b5d"
+    const val PROFILE_HASH = "69dcc9ef6676ad0a980953d92f7d4a7642b482d744d5b6131af4595267cda8c0"
     val FEATURE_PREFIXES = setOf("volumestar-glass-v2")
     val HOSTS = setOf("com.sec.android.app.launcher", "com.android.systemui")
     val TARGETS = HOSTS + "com.samsung.android.soundassistant"
@@ -592,34 +592,9 @@ internal object DexKitConfig {
         )
     val KNOWN_VERSIONS =
         mapOf(
-            "com.samsung.android.app.homestar" to setOf(1750005030L, 1800005036L),
-            "com.samsung.android.app.smartcapture" to setOf(617609000L, 624429000L),
             "com.samsung.android.soundassistant" to setOf(850000002L, 900000011L),
-            "com.android.settings" to setOf(37L),
             "com.sec.android.app.launcher" to setOf(1750305027L, 1800705053L),
             "com.android.systemui" to setOf(36L, 37L),
-            "com.samsung.android.app.dressroom" to setOf(295090000L, 301038000L),
         )
-    val PROFILE_PACKAGES =
-        mapOf(
-            36 to
-                setOf(
-                    "com.android.systemui",
-                    "com.samsung.android.app.dressroom",
-                    "com.samsung.android.app.homestar",
-                    "com.samsung.android.app.smartcapture",
-                    "com.samsung.android.soundassistant",
-                    "com.sec.android.app.launcher",
-                ),
-            37 to
-                setOf(
-                    "com.android.settings",
-                    "com.android.systemui",
-                    "com.samsung.android.app.dressroom",
-                    "com.samsung.android.app.homestar",
-                    "com.samsung.android.app.smartcapture",
-                    "com.samsung.android.soundassistant",
-                    "com.sec.android.app.launcher",
-                ),
-        )
+    val PROFILE_PACKAGES = mapOf(37 to TARGETS)
 }

@@ -306,6 +306,8 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             "ai_drawing_transparency_popup_layout" to anchors("blur_seek_bar_wrapper", cornerDp = 20),
             "style_popup_layout" to anchors("style_popup_main_layout", cornerDp = 22),
             "setting_popup_layout" to anchors("total_layout", cornerDp = 20),
+            "setting_brush_setting_popup_layout" to anchors("drawing_brush_setting_popup_horizontal_view", cornerDp = 20),
+            "vision_text_help_popup" to anchors("vision_text_help_text_container", cornerDp = 20),
             "gif_resizable_crop_view" to anchors("gif_toolbar_record_container_view", "record_area_close_button",
                 "stop_button_background", "stop_area_toolbar_close_btn"),
             "qr_dialog" to anchors("txtQRContentLayout", cornerDp = 20),

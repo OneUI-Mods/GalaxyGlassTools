@@ -5,6 +5,7 @@ import android.database.ContentObserver
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import dev.ryuya.galaxyglass.GlassTargets
 import java.io.File
 import java.lang.reflect.Field
 import java.lang.reflect.Member
@@ -112,15 +113,25 @@ object DexSymbols {
         // Known reviewed versions can retain their original guarded startup while preparing.
         // An unknown version is blocked until its semantic result is available.
         val initial = mutableListOf<Group>()
+        val reviewedStock = mutableSetOf<List<String>>()
         for ((pkg, versions) in DexKitConfig.KNOWN_VERSIONS) {
             try {
                 val info = context.packageManager.getApplicationInfo(pkg, 0)
                 val version = context.packageManager.getPackageInfo(pkg, 0).longVersionCode
-                if (pkg == context.packageName && version in versions) reviewedHost = true
+                val paths = listOf(info.sourceDir) + info.splitSourceDirs.orEmpty()
+                val stockPath = when (pkg) {
+                    GlassTargets.LAUNCHER -> "/system/priv-app/TouchWizHome_2017/TouchWizHome_2017.apk"
+                    GlassTargets.SYSTEM_UI -> "/system_ext/priv-app/SystemUI/SystemUI.apk"
+                    else -> null
+                }
+                val stock = version in versions && GlassTargets.supportsSystemGlass() &&
+                    stockPath != null && paths == listOf(stockPath)
+                if (stock) reviewedStock += paths
+                if (pkg == context.packageName) reviewedHost = stock
                 val bindings =
-                    if (version in versions) emptyMap()
+                    if (stock) emptyMap()
                     else DexKitConfig.CLASSES_BY_TARGET[pkg].orEmpty().associate { "C:$it" to null }
-                initial += Group(listOf(info.sourceDir) + info.splitSourceDirs.orEmpty(), bindings)
+                initial += Group(paths, bindings)
             } catch (_: Exception) {
                 /* Optional package not installed. */
             }
@@ -144,12 +155,11 @@ object DexSymbols {
                             (0 until (values["paths.count"]?.toInt() ?: 0)).map {
                                 checkNotNull(values["paths.$it"])
                             }
-                        Group(
-                            paths,
-                            values.filterKeys {
-                                it.startsWith("C:") || it.startsWith("M:") || it.startsWith("F:")
-                            },
-                        )
+                        // Search misses must not override the named contracts on the reviewed stock APK.
+                        if (paths in reviewedStock) Group(paths, emptyMap())
+                        else Group(paths, values.filterKeys {
+                            it.startsWith("C:") || it.startsWith("M:") || it.startsWith("F:")
+                        })
                     }
                     snapshot = Snapshot(snapshot.epoch + 1, groups)
                     val actions =
