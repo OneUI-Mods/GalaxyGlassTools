@@ -20,6 +20,13 @@ import com.google.android.material.slider.Slider
 class GlassActivity : AppCompatActivity() {
     private var statePrefs: SharedPreferences? = null
     private var stateListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var scopeStatus: TextView? = null
+    private var scopeGeneration = 0
+
+    override fun onResume() {
+        super.onResume()
+        updateSystemAppScope(request = false)
+    }
 
     override fun onDestroy() {
         stateListener?.let { statePrefs?.unregisterOnSharedPreferenceChangeListener(it) }
@@ -45,6 +52,16 @@ class GlassActivity : AppCompatActivity() {
         }
         val prefs = getSharedPreferences(ConfigProvider.PREFS, Context.MODE_PRIVATE)
         val master = requireViewById<MaterialSwitch>(R.id.glass_enabled)
+        val systemApps = requireViewById<MaterialSwitch>(R.id.glass_system_apps)
+        systemApps.isChecked = prefs.getBoolean(SystemAppGlassConfig.SWITCH, true)
+        scopeStatus = requireViewById(R.id.glass_system_app_scope_status)
+        requireViewById<View>(R.id.glass_system_app_scope).setOnClickListener {
+            updateSystemAppScope(request = true)
+        }
+        systemApps.setOnCheckedChangeListener { _, enabled ->
+            prefs.edit().putBoolean(SystemAppGlassConfig.SWITCH, enabled).apply()
+            FrameworkServiceConnection.publishSystemAppConfig(this)
+        }
         val capture = requireViewById<MaterialSwitch>(R.id.glass_capture)
         master.isChecked = prefs.getBoolean("enabled", true)
         capture.isChecked = prefs.getBoolean(GlassTargets.CAPTURE_SETTING, false)
@@ -135,13 +152,14 @@ class GlassActivity : AppCompatActivity() {
         }
         fun changed() {
             if (supported) contentResolver.notifyChange(ConfigProvider.URI, null)
+            FrameworkServiceConnection.publishSystemAppConfig(this)
         }
         for ((control, key) in listOf(quick to GlassAppearance.QUICK,
                    notifications to GlassAppearance.NOTIFICATIONS, volume to GlassAppearance.VOLUME,
                    systemSurfaces to GlassAppearance.SYSTEM_SURFACES, lockScreen to GlassAppearance.LOCK_SCREEN,
                    home to GlassAppearance.HOME, master to "enabled", capture to GlassTargets.CAPTURE_SETTING)) {
             control.setOnCheckedChangeListener { _, enabled ->
-                if (supported) prefs.edit().putBoolean(key, enabled).apply()
+                if (supported || control === master) prefs.edit().putBoolean(key, enabled).apply()
                 display()
                 changed()
             }
@@ -149,7 +167,7 @@ class GlassActivity : AppCompatActivity() {
         fun bindSlider(control: Slider, key: String) {
             val notifyHosts = Runnable { changed() }
             control.addOnChangeListener { _, position, fromUser ->
-                if (supported && fromUser) {
+                if (fromUser) {
                     prefs.edit().putInt(key, position.toInt()).apply()
                     control.removeCallbacks(notifyHosts)
                     control.postDelayed(notifyHosts, 80L)
@@ -160,6 +178,26 @@ class GlassActivity : AppCompatActivity() {
         bindSlider(slider, GlassAppearance.STRENGTH)
         bindSlider(tintSlider, GlassAppearance.TINT)
         display()
+    }
+
+    private fun updateSystemAppScope(request: Boolean) {
+        val status = scopeStatus ?: return
+        val generation = ++scopeGeneration
+        FrameworkServiceConnection.systemAppScope(this, request) { result ->
+            runOnUiThread {
+                if (isDestroyed || result.state == FrameworkServiceConnection.ScopeState.COUNT &&
+                    generation != scopeGeneration) return@runOnUiThread
+                status.text = when (result.state) {
+                    FrameworkServiceConnection.ScopeState.COUNT ->
+                        getString(R.string.glass_system_app_scope_count, result.applied, result.total)
+                    FrameworkServiceConnection.ScopeState.APPROVED ->
+                        getString(R.string.glass_system_app_scope_approved, result.applied, result.total)
+                    FrameworkServiceConnection.ScopeState.REQUESTED -> getString(R.string.glass_system_app_scope_pending)
+                    FrameworkServiceConnection.ScopeState.DISCONNECTED -> getString(R.string.glass_system_app_scope_disconnected)
+                    FrameworkServiceConnection.ScopeState.FAILED -> getString(R.string.glass_system_app_scope_failed)
+                }
+            }
+        }
     }
 
     private fun bindReloadButtons() {

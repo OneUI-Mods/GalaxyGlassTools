@@ -40,4 +40,11 @@
     <string name="license_title">オープンソースライセンス</string>
     <string name="own_license">アプリのライセンス（MIT）</string>
     <string name="license_unavailable">ライセンス情報を読み込めませんでした。</string>
+    <string name="glass_system_apps">システムアプリ</string>
+    <string name="glass_system_app_scope_request">システムアプリを一括で適用範囲に追加</string>
+    <string name="glass_system_app_scope_count">画面を持つシステムアプリ %2$d 件中 %1$d 件が適用範囲内</string>
+    <string name="glass_system_app_scope_pending">Xposedマネージャーで適用範囲の追加を許可してください。</string>
+    <string name="glass_system_app_scope_approved">適用範囲を更新しました（%2$d 件中 %1$d 件）。各アプリを開き直すと読み込みます。</string>
+    <string name="glass_system_app_scope_disconnected">Xposedマネージャーへの接続待ちです。マネージャーでこのモジュールを有効にして開き直してください。</string>
+    <string name="glass_system_app_scope_failed">適用範囲を追加できませんでした。再試行するか、Xposedマネージャーで対象を選んでください。</string>
 </resources>

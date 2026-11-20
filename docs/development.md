@@ -9,3 +9,9 @@ The old apps export their last glass settings to the release certificate of Gala
 [Rendering and review notes](glass-appearance.md)
 
 The release APK bundles the Android 17 DexKit profiles as `assets/oneui-dexkit-profiles.json`. The profile digest in `DexKitConfig` identifies the cache generation. On the reviewed BZI9 stock SystemUI and Home APKs, the module retains the verified native class names and signatures even if a semantic search returns an unresolved entry. Updated APKs use the discovery result.
+
+## System-app scope
+
+The three original package entries keep their dedicated adapters. API 102 dynamic scope adds owner-profile system apps that declare activities. The settings screen sends the eligible list through the framework's scope service. Hook processes read only the shared appearance settings from the framework's remote preferences.
+
+The common adapter styles bounded native controls and supported Material Compose bars, with additional resource IDs verified against the Samsung APKs. It reuses the existing material above native backgrounds and uses the native window policy. It does not start an app or use screen capture in these hosts. View-level and Compose adapters only style interactive, application-owned, non-secure windows. Each active app process has its own crash guard.

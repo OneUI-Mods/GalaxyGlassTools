@@ -40,4 +40,11 @@
     <string name="license_title">오픈소스 라이선스</string>
     <string name="own_license">앱 라이선스 (MIT)</string>
     <string name="license_unavailable">라이선스 정보를 불러오지 못했습니다.</string>
+    <string name="glass_system_apps">시스템 앱</string>
+    <string name="glass_system_app_scope_request">모든 시스템 앱을 적용 범위에 추가</string>
+    <string name="glass_system_app_scope_count">화면이 있는 시스템 앱 %2$d개 중 %1$d개가 범위에 포함됨</string>
+    <string name="glass_system_app_scope_pending">Xposed 관리자에서 적용 범위 추가를 허용하세요.</string>
+    <string name="glass_system_app_scope_approved">범위를 업데이트했습니다(%2$d개 중 %1$d개). 앱을 다시 열면 적용됩니다.</string>
+    <string name="glass_system_app_scope_disconnected">Xposed 관리자 연결을 대기 중입니다. 관리자에서 모듈을 켜고 앱을 다시 여세요.</string>
+    <string name="glass_system_app_scope_failed">범위를 추가하지 못했습니다. 다시 시도하거나 Xposed 관리자에서 앱을 선택하세요.</string>
 </resources>

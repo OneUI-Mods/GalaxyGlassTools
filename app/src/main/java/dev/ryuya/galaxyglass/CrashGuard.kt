@@ -74,6 +74,11 @@ class CrashGuard private constructor(context: Context, fileName: String) {
             return enter(context, process, "$FILE.${process.removePrefix(SYSTEM_UI_PREFIX)}")
         }
 
+        internal fun enterSystemApp(context: Context, process: String): CrashGuard {
+            val suffix = process.substringAfter(':', "main").replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            return enter(context, process, "$FILE.systemapp.$suffix")
+        }
+
         private fun enter(context: Context, processName: String, fileName: String): CrashGuard {
             val guard = CrashGuard(context, fileName)
             try {

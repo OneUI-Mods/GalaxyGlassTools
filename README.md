@@ -2,12 +2,15 @@
 
 [English](README.en.md) · [開発者向け](docs/development.md)
 
-GalaxyのSystemUI、One UIホーム、Samsung Captureにガラス効果を適用するVector／libxposed対応モジュールです。クイックパネル、通知とロック画面、音量パネル、ホームのフォルダやドック、撮影の操作画面を個別に切り替えられます。
+GalaxyのSystemUI、One UIホーム、Samsung Capture、画面を持つシステムアプリにガラス効果を適用するVector／libxposed対応モジュールです。クイックパネル、通知とロック画面、音量パネル、ホームのフォルダやドック、撮影の操作画面を個別に切り替えられます。
 
 1. Galaxy Glass Toolsをインストールします。
 2. 移行する場合は、One UI Home Tweaks 0.21.52とGalaxy Capture Tools 0.4.15以降に更新します。ガラスの設定は旧アプリから一度引き継ぎます。
 3. VectorでGalaxy Glass Toolsを有効にし、SystemUI、One UIホーム、Samsung Captureから使う対象を選びます。
-4. 対象プロセスを再読み込みし、Galaxy Glass Toolsで表示と描画状況を確認します。
+4. システムアプリも使う場合は「システムアプリを一括で適用範囲に追加」を押し、Vectorで許可します。
+5. 対象アプリを開き直します。SystemUIなどは対象プロセスの再読み込みで反映できます。
+
+システムアプリでは、標準のツールバー、検索バー、ナビゲーション、カード、ダイアログ、ポップアップに適用します。設定、電話、連絡先、ギャラリー、カメラ、マイファイル、ファイル選択には個別の描画先もあります。認証画面と保護されたウィンドウは従来の表示を使います。
 
 確認対象はGalaxy S26 Ultra（SM-S948Q）のAndroid 17 BZI9です。Android 16 AZHLではSamsung Capture用の経路を用意しています。アプリ内プレビューはモジュールを有効にする前にも使えます。
 
