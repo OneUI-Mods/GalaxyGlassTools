@@ -10,3 +10,5 @@ An Android module for glass effects in Galaxy SystemUI, One UI Home and Samsung 
 4. Reload the selected processes and check the surface diagnostics in Galaxy Glass Tools.
 
 The main rendering contract targets Android 17 BZI9 on the Galaxy S26 Ultra (SM-S948Q). Android 16 AZHL has a separate Samsung Capture path. The local preview is available without enabling the module.
+
+The settings screen can reload One UI Home and Samsung Capture separately with root access. Home opens immediately. Samsung Capture starts on the next screenshot or recording. A current recording or screen share blocks its reload.

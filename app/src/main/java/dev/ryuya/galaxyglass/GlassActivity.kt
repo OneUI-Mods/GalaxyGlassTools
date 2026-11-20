@@ -3,6 +3,7 @@ package dev.ryuya.galaxyglass
 import android.content.Intent
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.provider.Settings
 import android.os.Bundle
 import android.view.View
@@ -11,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
@@ -30,6 +32,7 @@ class GlassActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_glass)
         GlassSettings.migrate(this)
+        bindReloadButtons()
         val root = requireViewById<View>(R.id.glass_root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -157,6 +160,34 @@ class GlassActivity : AppCompatActivity() {
         bindSlider(slider, GlassAppearance.STRENGTH)
         bindSlider(tintSlider, GlassAppearance.TINT)
         display()
+    }
+
+    private fun bindReloadButtons() {
+        val buttons = TargetReload.Target.entries.associateWith { requireViewById<MaterialButton>(it.button) }
+        val available = buttons.keys.associateWith { target ->
+            try {
+                val app = packageManager.getApplicationInfo(target.packageName, PackageManager.ApplicationInfoFlags.of(0))
+                app.enabled
+            } catch (_: PackageManager.NameNotFoundException) {
+                false
+            }
+        }
+        for ((target, button) in buttons) {
+            button.isEnabled = available.getValue(target)
+            button.setOnClickListener {
+                val status = requireViewById<TextView>(R.id.glass_reload_status)
+                if (TargetReload.start(target) { result ->
+                        runOnUiThread {
+                            if (isDestroyed) return@runOnUiThread
+                            status.setText(result.message)
+                            for ((item, action) in buttons) action.isEnabled = available.getValue(item)
+                        }
+                    }) {
+                    buttons.values.forEach { it.isEnabled = false }
+                }
+                status.setText(R.string.glass_reload_working)
+            }
+        }
     }
 
     private fun showSurfaceDiagnostics() {

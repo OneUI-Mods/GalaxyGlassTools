@@ -18,6 +18,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".LicensesActivity" android:exported="false"/>
+        <activity android:name=".LicenseDetailActivity" android:exported="false"/>
         <provider android:name=".ConfigProvider" android:authorities="${applicationId}.config"
             android:exported="true"/>
         <provider android:name=".compat.DexKitProvider" android:authorities="${applicationId}.dexkit"

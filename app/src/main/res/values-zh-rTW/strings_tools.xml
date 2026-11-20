@@ -1,0 +1,18 @@
+<resources>
+    <string name="license_search">搜尋程式庫或授權條款</string>
+    <string name="license_no_results">沒有符合的授權條款</string>
+    <string name="license_source">查看上游原始碼</string>
+    <string name="license_browser_unavailable">沒有可用的瀏覽器。</string>
+    <string name="license_artifact_summary">%1$s · %2$s · %3$s</string>
+    <string name="license_reference">%1$s · %2$s · %3$s（僅在建置時使用）</string>
+    <string name="glass_reload_title">重新載入元件</string>
+    <string name="glass_reload_home">重新啟動 One UI 主螢幕</string>
+    <string name="glass_reload_capture">重新載入 Samsung Capture</string>
+    <string name="glass_reload_hint">需要 Root 權限。主螢幕會立即重新開啟，下次截圖或螢幕錄影時會重新啟動 Samsung Capture。</string>
+    <string name="glass_reload_working">正在重新載入…</string>
+    <string name="glass_reload_home_ready">已重新啟動 One UI 主螢幕。</string>
+    <string name="glass_reload_capture_ready">下次截圖或錄影時會重新啟動 Samsung Capture。</string>
+    <string name="glass_reload_capture_busy">請結束目前的錄影或螢幕分享，再試一次。</string>
+    <string name="glass_reload_root_required">請授予 Galaxy Glass Tools Root 權限，再試一次。</string>
+    <string name="glass_reload_failed">無法重新載入元件。</string>
+</resources>

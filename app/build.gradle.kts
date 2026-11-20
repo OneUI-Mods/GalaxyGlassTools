@@ -25,8 +25,8 @@ android {
         applicationId = "dev.ryuya.galaxyglass"
         minSdk = 33
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
     }
     signingConfigs {
         if (!distributionProperties.isEmpty)
@@ -115,22 +115,15 @@ val dependencyLicenses =
             val out = generatedLicenses.get().asFile
             out.mkdirs()
             rootProject.file("LICENSE").copyTo(out.resolve("APP_LICENSE.txt"), true)
-            val notices = buildString {
-                append(
-                    "Bundled runtime dependencies (including transitive dependencies), plus compile-only Xposed API.\n\n",
-                )
-                append(
-                    "AndroidX / Material: The Android Open Source Project and respective contributors.\nKotlin / coroutines / annotations: JetBrains and respective contributors.\nGuava / Error Prone / J2ObjC / JSpecify: Google and respective contributors.\nlibxposed API: libxposed contributors.\n\n",
-                )
-                for (row in rows) append(
-                    row[0] + "\n" + row[1] + "\n" + row.getOrElse(3) { "" } + "\n\n",
-                )
-                for (name in rows.map { it[2] }.distinct()) {
-                    append("\n===== $name =====\n\n")
-                    append(rootProject.file("third_party/$name").readText())
-                }
+            val texts = out.resolve("licenses")
+            texts.mkdirs()
+            for (name in rows.map { it[2] }.distinct()) {
+                rootProject.file("third_party/$name").copyTo(texts.resolve(name), true)
             }
-            out.resolve("THIRD_PARTY_NOTICES.txt").writeText(notices)
+            out.resolve("THIRD_PARTY_NOTICES.txt").delete()
+            out.resolve("LICENSE_CATALOG.tsv").writeText(
+                rows.joinToString(separator = "\n", postfix = "\n") { it.joinToString("\t") },
+            )
         }
     }
 

@@ -1,0 +1,18 @@
+<resources>
+    <string name="license_search">Search libraries or licenses</string>
+    <string name="license_no_results">No matching licenses</string>
+    <string name="license_source">View upstream source</string>
+    <string name="license_browser_unavailable">No browser is available.</string>
+    <string name="license_artifact_summary">%1$s · %2$s · %3$s</string>
+    <string name="license_reference">%1$s · %2$s · %3$s (build-time API)</string>
+    <string name="glass_reload_title">Reload components</string>
+    <string name="glass_reload_home">Restart One UI Home</string>
+    <string name="glass_reload_capture">Reload Samsung Capture</string>
+    <string name="glass_reload_hint">Requires root. Home reopens immediately. Samsung Capture starts again the next time you take a screenshot or begin recording.</string>
+    <string name="glass_reload_working">Reloading…</string>
+    <string name="glass_reload_home_ready">One UI Home restarted.</string>
+    <string name="glass_reload_capture_ready">Samsung Capture will start fresh on the next capture.</string>
+    <string name="glass_reload_capture_busy">Finish the current recording or screen share and try again.</string>
+    <string name="glass_reload_root_required">Allow root access for Galaxy Glass Tools and try again.</string>
+    <string name="glass_reload_failed">The component could not be reloaded.</string>
+</resources>

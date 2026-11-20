@@ -1,0 +1,18 @@
+<resources>
+    <string name="license_search">라이브러리 또는 라이선스 검색</string>
+    <string name="license_no_results">일치하는 라이선스가 없습니다</string>
+    <string name="license_source">원본 소스 보기</string>
+    <string name="license_browser_unavailable">사용할 수 있는 브라우저가 없습니다.</string>
+    <string name="license_artifact_summary">%1$s · %2$s · %3$s</string>
+    <string name="license_reference">%1$s · %2$s · %3$s(빌드 전용 API)</string>
+    <string name="glass_reload_title">구성 요소 다시 로드</string>
+    <string name="glass_reload_home">One UI 홈 다시 시작</string>
+    <string name="glass_reload_capture">Samsung Capture 다시 로드</string>
+    <string name="glass_reload_hint">루트 권한이 필요합니다. 홈은 바로 열립니다. Samsung Capture는 다음 화면 캡처 또는 녹화 시 시작됩니다.</string>
+    <string name="glass_reload_working">다시 로드하는 중…</string>
+    <string name="glass_reload_home_ready">One UI 홈을 다시 시작했습니다.</string>
+    <string name="glass_reload_capture_ready">다음 화면 캡처 시 Samsung Capture가 다시 시작됩니다.</string>
+    <string name="glass_reload_capture_busy">녹화 또는 화면 공유를 종료한 후 다시 시도하세요.</string>
+    <string name="glass_reload_root_required">Galaxy Glass Tools에 루트 권한을 허용한 후 다시 시도하세요.</string>
+    <string name="glass_reload_failed">구성 요소를 다시 로드할 수 없습니다.</string>
+</resources>

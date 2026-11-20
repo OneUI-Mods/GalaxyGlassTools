@@ -1,0 +1,18 @@
+<resources>
+    <string name="license_search">ライブラリ・ライセンスを検索</string>
+    <string name="license_no_results">該当するライセンスがありません</string>
+    <string name="license_source">配布元を開く</string>
+    <string name="license_browser_unavailable">開けるブラウザがありません。</string>
+    <string name="license_artifact_summary">%1$s · %2$s · %3$s</string>
+    <string name="license_reference">%1$s · %2$s · %3$s（ビルド時のみ）</string>
+    <string name="glass_reload_title">対象を再読み込み</string>
+    <string name="glass_reload_home">One UIホームを再起動</string>
+    <string name="glass_reload_capture">Samsung Captureを再読み込み</string>
+    <string name="glass_reload_hint">Root権限が必要です。ホームは再起動後に開きます。Samsung Captureは次にスクリーンショットや画面録画を使うときに起動します。</string>
+    <string name="glass_reload_working">再読み込み中…</string>
+    <string name="glass_reload_home_ready">One UIホームを再起動しました。</string>
+    <string name="glass_reload_capture_ready">Samsung Captureは次回の撮影時に起動します。</string>
+    <string name="glass_reload_capture_busy">録画または画面共有を終了してから、もう一度お試しください。</string>
+    <string name="glass_reload_root_required">Galaxy Glass ToolsにRoot権限を許可してから、もう一度お試しください。</string>
+    <string name="glass_reload_failed">再読み込みできませんでした。</string>
+</resources>
