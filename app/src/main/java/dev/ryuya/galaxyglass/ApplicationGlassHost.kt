@@ -10,6 +10,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.res.Resources
 import android.database.ContentObserver
 import android.graphics.Canvas
 import android.graphics.ColorFilter
@@ -20,11 +21,13 @@ import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.DrawableWrapper
+import android.inputmethodservice.InputMethodService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.InputType
 import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
@@ -34,6 +37,7 @@ import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.PopupWindow
 import android.widget.Toolbar
 import java.lang.ref.WeakReference
@@ -51,10 +55,12 @@ internal class ApplicationGlassHost(
     private val views = WeakHashMap<View, WindowBinding>()
     private val activityWindows = WeakHashMap<Activity, WeakReference<View>>()
     private val rolesByType = mutableMapOf<Class<*>, Int?>()
-    private val namedPlates = ApplicationGlassTargets.plates(app.packageName).mapNotNull { (name, corner) ->
-        app.resources.getIdentifier(name, "id", app.packageName).takeIf { it != View.NO_ID && it != 0 }
-            ?.let { it to corner }
-    }.toMap()
+    private val plateNames = ApplicationGlassTargets.plates(app.packageName) + ApplicationGlassTargets.sheetPlates
+    private val inputMethodPlateNames = ApplicationGlassTargets.inputMethodPlates(app.packageName)
+    private val namedPlates = resolvePlates(plateNames)
+    private val inputPlateIds: Map<Int, Int> = resolvePlates(inputMethodPlateNames)
+    private val splitPlates = WeakHashMap<Resources, MutableMap<Int, Int?>>()
+    private val sheetPanelId = app.resources.getIdentifier("design_bottom_sheet", "id", app.packageName)
     private val panelIds = listOf("android", app.packageName).map {
         app.resources.getIdentifier("parentPanel", "id", it)
     }.filter { it != 0 }.distinct()
@@ -65,8 +71,11 @@ internal class ApplicationGlassHost(
     private var resumed = WeakReference<Activity>(null)
     private var hasDrawn = false
     private var failureLogged = false
-    private var compose: ApplicationComposeChrome? = null
+    private val composeRenderers = mutableListOf<ApplicationComposeChrome>()
+    private val composeLoaders = mutableSetOf<ClassLoader>()
+    private val composeMethods = mutableSetOf<java.lang.reflect.Method>()
     private val composeCorners = FloatArray(8)
+    private var inputMethod = WeakReference<InputMethodService>(null)
     private var guardStarted = false
     private var blocked = false
     private val readListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
@@ -84,9 +93,8 @@ internal class ApplicationGlassHost(
 
     fun start(firstActivity: Activity?) {
         installWindowHooks()
-        compose = runCatching {
-            ApplicationComposeChrome(app.classLoader, ::composeStrength, ::drawCompose)
-        }.getOrNull()
+        if (inputMethodPlateNames.isNotEmpty()) installInputMethodHooks()
+        prepareCompose(firstActivity?.classLoader ?: app.classLoader)
         app.registerActivityLifecycleCallbacks(this)
         resumed = WeakReference(firstActivity)
         prefs.registerOnSharedPreferenceChangeListener(readListener)
@@ -104,14 +112,72 @@ internal class ApplicationGlassHost(
                 if (intent.action == Intent.ACTION_SCREEN_OFF) {
                     interactive = false
                     views.values.toList().forEach { it.restore() }
-                    compose?.refresh()
+                    composeRenderers.forEach(ApplicationComposeChrome::refresh)
                 } else updateWindows()
             }
         }, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
         }, Context.RECEIVER_NOT_EXPORTED)
+        if (firstActivity?.window?.peekDecorView()?.isAttachedToWindow == true) onActivityPostResumed(firstActivity)
         HookEntry.log("GLASS_APP_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
+    }
+
+    private fun resolvePlates(names: Map<String, Int>): Map<Int, Int> =
+        names.mapNotNull { (name, corner) ->
+            app.resources.getIdentifier(name, "id", app.packageName).takeIf { it != 0 }?.let { it to corner }
+        }.toMap()
+
+    private fun prepareCompose(loader: ClassLoader) {
+        if (!composeLoaders.add(loader)) return
+        runCatching {
+            ApplicationComposeChrome(loader, composeMethods, ::composeStrength, ::drawCompose)
+        }.getOrNull()?.let(composeRenderers::add)
+    }
+
+    fun bindInputMethod(service: InputMethodService) {
+        inputMethod = WeakReference(service)
+        val window = service.window?.window ?: return
+        val decor = window.peekDecorView() ?: return
+        observeInputMethod(decor, window.attributes)
+    }
+
+    private fun installInputMethodHooks() {
+        runCatching {
+            val owner = Class.forName("android.view.WindowManagerGlobal")
+            val add = owner.declaredMethods.single {
+                it.name == "addView" && it.parameterTypes.getOrNull(0) == View::class.java &&
+                    it.parameterTypes.getOrNull(1) == ViewGroup.LayoutParams::class.java
+            }
+            ModernHook.aroundMethod(add) { chain ->
+                val result = chain.proceed()
+                if (main.looper.isCurrentThread) safely {
+                    val params = chain.args[1] as? WindowManager.LayoutParams
+                    if (params != null && isInputMethodWindow(params)) {
+                        observeInputMethod(chain.args[0] as View, params)
+                    }
+                }
+                result
+            }
+        }.onFailure { HookEntry.log("GLASS_APP_INPUT_WINDOW_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+        runCatching {
+            val start = InputMethodService::class.java.getMethod(
+                "onStartInput", EditorInfo::class.java, Boolean::class.javaPrimitiveType,
+            )
+            ModernHook.aroundMethod(start) { chain ->
+                val result = chain.proceed()
+                if (main.looper.isCurrentThread && chain.thisObject === inputMethod.get()) safely {
+                    updateWindows()
+                    views.values.forEach { it.invalidate() }
+                }
+                result
+            }
+        }.onFailure { HookEntry.log("GLASS_APP_INPUT_EDITOR_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+    }
+
+    private fun observeInputMethod(root: View, params: WindowManager.LayoutParams) {
+        if (!isInputMethodWindow(params) || secure(params) || !belongsToApp(root)) return
+        observe(root, null, null, null, ime = true)
     }
 
     private fun installWindowHooks() {
@@ -126,7 +192,9 @@ internal class ApplicationGlassHost(
                     if (window != null && decor != null && belongsToApp(decor) &&
                         !sensitive(dialog.javaClass.name) && permitted(window.attributes)) {
                         val owner = activityOf(dialog.context)
-                        val panel = if (window.isFloating) {
+                        if (owner == null && inputMethod.get() != null) return@safely
+                        val sheet = sheetPanelId != 0 && decor.findViewById<View>(sheetPanelId) != null
+                        val panel = if (window.isFloating && !sheet) {
                             panelIds.firstNotNullOfOrNull { decor.findViewById<View>(it) }
                                 ?: decor.takeIf(::hasVisibleBackground)
                         } else null
@@ -150,9 +218,11 @@ internal class ApplicationGlassHost(
                         val root = content.rootView
                         val attributes = root.layoutParams as? WindowManager.LayoutParams
                         if (attributes != null && permitted(attributes)) {
+                            val owner = activityOf(content.context)
+                            if (owner == null && inputMethod.get() != null) return@safely
                             val panel = generateSequence(content) { it.parent as? View }
                                 .firstOrNull(::hasVisibleBackground) ?: content
-                            observe(root, activityOf(content.context), null, panel)
+                            observe(root, owner, null, panel)
                         }
                     }
                 }
@@ -162,6 +232,7 @@ internal class ApplicationGlassHost(
     }
 
     override fun onActivityPostResumed(activity: Activity) = safely {
+        prepareCompose(activity.classLoader)
         resumed = WeakReference(activity)
         updateInteractive()
         val window = activity.window ?: return@safely
@@ -177,29 +248,31 @@ internal class ApplicationGlassHost(
     }
 
     override fun onActivityDestroyed(activity: Activity) = onActivityStopped(activity)
+    override fun onActivityPreCreated(activity: Activity, state: Bundle?) = prepareCompose(activity.classLoader)
     override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
     override fun onActivityStarted(activity: Activity) = Unit
     override fun onActivityResumed(activity: Activity) = Unit
     override fun onActivityPaused(activity: Activity) = Unit
     override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
 
-    private fun observe(root: View, owner: Activity?, window: Window?, panel: View?) {
+    private fun observe(root: View, owner: Activity?, window: Window?, panel: View?, ime: Boolean = false) {
         if (owner?.javaClass?.name?.let(::sensitive) == true) return
         if (views.containsKey(root)) return
-        val binding = WindowBinding(root, owner, window, panel)
+        val binding = WindowBinding(root, owner, window, panel, ime)
         views[root] = binding
         root.addOnAttachStateChangeListener(binding)
         if (root.isAttachedToWindow) binding.onViewAttachedToWindow(root)
     }
 
     private fun updateInteractive() {
-        interactive = power?.isInteractive == true && keyguard?.isKeyguardLocked == false
+        interactive = power?.isInteractive == true && keyguard?.isKeyguardLocked == false &&
+            !keyguard.isDeviceLocked
     }
 
     private fun updateWindows() = safely {
         updateInteractive()
         views.values.toList().forEach { it.refresh() }
-        compose?.refresh()
+        composeRenderers.forEach(ApplicationComposeChrome::refresh)
     }
 
     private fun composeStrength(view: View): Int {
@@ -209,15 +282,18 @@ internal class ApplicationGlassHost(
         return if (permitted(params) && ensureGuard()) config.strength else 0
     }
 
-    private fun drawCompose(view: View, canvas: Canvas, width: Float, height: Float, corner: Int, level: Int) {
+    private fun drawCompose(
+        view: View, canvas: Canvas, width: Float, height: Float, surface: ApplicationComposeChrome.Surface, level: Int,
+    ) {
         val density = view.resources.displayMetrics.density
-        val maxThickness = if (corner == 0) 216f else 144f
-        if (minOf(width, height) > maxThickness * density) return
-        val radius = (corner * density).coerceAtMost(minOf(width, height) * .5f)
+        val maxThickness = if (surface.radius == 0) 216f else 144f
+        if (!surface.panel && minOf(width, height) > maxThickness * density) return
+        val radius = (surface.radius * density).coerceAtMost(minOf(width, height) * .5f)
         composeCorners.fill(radius)
         material.tint = config.tint
         material.drawSurface(canvas, 0f, 0f, width, height, composeCorners, level,
-            view.resources.configuration.isNightModeActive, fill = false, rim = true,
+            view.resources.configuration.isNightModeActive, fill = surface.panel, rim = true,
+            opacity = if (surface.panel) .45f else 1f,
             profile = GlassMaterial.Profile.SYSTEM_SURFACE)
         didDraw()
     }
@@ -237,10 +313,25 @@ internal class ApplicationGlassHost(
         return !blocked
     }
 
+    private fun secure(params: WindowManager.LayoutParams): Boolean =
+        params.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+
     private fun permitted(params: WindowManager.LayoutParams): Boolean =
-        params.flags and WindowManager.LayoutParams.FLAG_SECURE == 0 &&
+        !secure(params) &&
             (params.type in WindowManager.LayoutParams.FIRST_APPLICATION_WINDOW..WindowManager.LayoutParams.LAST_APPLICATION_WINDOW ||
                 params.type in WindowManager.LayoutParams.FIRST_SUB_WINDOW..WindowManager.LayoutParams.LAST_SUB_WINDOW)
+
+    private fun isInputMethodWindow(params: WindowManager.LayoutParams): Boolean =
+        params.type == WindowManager.LayoutParams.TYPE_INPUT_METHOD ||
+            params.type == WindowManager.LayoutParams.TYPE_INPUT_METHOD_DIALOG
+
+    private fun permitsInputMethod(params: WindowManager.LayoutParams): Boolean {
+        if (secure(params) || !isInputMethodWindow(params)) return false
+        val editor = inputMethod.get()?.currentInputEditorInfo ?: return false
+        if (editor.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0) return false
+        val variation = editor.inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)
+        return variation != InputType.TYPE_NULL && variation !in PRIVATE_INPUT_TYPES
+    }
 
     private fun belongsToApp(view: View) = view.context.applicationContext?.packageName == app.packageName
 
@@ -263,8 +354,18 @@ internal class ApplicationGlassHost(
         else -> true
     }
 
-    private fun corner(view: View): Int? {
+    private fun corner(view: View, ime: Boolean): Int? {
+        if (ime) return inputPlateIds[view.id]
         namedPlates[view.id]?.let { return it }
+        if (ApplicationGlassTargets.usesOverlay(app.packageName, view.javaClass.name)) return 0
+        if (view.id != 0 && view.id != View.NO_ID && view.resources !== app.resources) {
+            val splitNames = splitPlates.getOrPut(view.resources) { mutableMapOf() }
+            if (!splitNames.containsKey(view.id)) {
+                val name = runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull()
+                splitNames[view.id] = plateNames[name]
+            }
+            splitNames[view.id]?.let { return it }
+        }
         if (view is Toolbar) return 0
         return rolesByType.getOrPut(view.javaClass) {
             generateSequence(view.javaClass as Class<*>?) { it.superclass }
@@ -286,7 +387,7 @@ internal class ApplicationGlassHost(
     private fun reduceTransparency() =
         Settings.System.getInt(app.contentResolver, REDUCE_TRANSPARENCY, 0) != 0
 
-    private inner class WindowBinding(root: View, owner: Activity?, window: Window?, panel: View?) :
+    private inner class WindowBinding(root: View, owner: Activity?, window: Window?, panel: View?, private val ime: Boolean) :
         View.OnAttachStateChangeListener, ViewTreeObserver.OnGlobalLayoutListener {
         private val root = WeakReference(root)
         private val owner = WeakReference(owner)
@@ -294,7 +395,16 @@ internal class ApplicationGlassHost(
         private val panel = WeakReference(panel)
         private val plates = WeakHashMap<View, Plate>()
         private var observer: ViewTreeObserver? = null
-        private var budget = 0
+        private val pending = ArrayDeque<View>()
+        private var scanPosted = false
+        private var scanAgain = false
+        private val continueScan = Runnable {
+            scanPosted = false
+            safely {
+                val attached = this.root.get() ?: return@safely
+                if (!enabled(attached)) restore() else scanBatch(attached)
+            }
+        }
         private var barPlate: SystemBarPlate? = null
 
         override fun onViewAttachedToWindow(view: View) {
@@ -313,7 +423,7 @@ internal class ApplicationGlassHost(
                 resumed.get()?.javaClass?.name?.let(::sensitive) == true
             ) return false
             val params = window.get()?.attributes ?: root.layoutParams as? WindowManager.LayoutParams ?: return false
-            return permitted(params)
+            return if (ime) permitsInputMethod(params) else permitted(params)
         }
 
         fun refresh() {
@@ -326,14 +436,12 @@ internal class ApplicationGlassHost(
                 if (!view.isAttachedToWindow || view.rootView !== root || !view.isShown) unbind(view, plate)
                 else if (plate.overlay) plate.setBounds(0, 0, view.width, view.height)
             }
-            val dedicated = panel.get()
-            budget = MAX_VIEWS
-            if (dedicated != null) {
-                bind(dedicated, 24)
-            } else {
-                scan(root, 0)
+            if (scanPosted) {
+                scanAgain = true
+                return
             }
-            updateSystemBars(root)
+            pending.addLast(panel.get() ?: root)
+            scanBatch(root)
         }
 
         private fun updateSystemBars(root: View) {
@@ -341,7 +449,7 @@ internal class ApplicationGlassHost(
             val insets = root.rootWindowInsets
             val chrome = insets?.getInsets(WindowInsets.Type.systemBars()) ?: Insets.NONE
             val appWindow = activity != null && window.get() === activity.window
-            if (!appWindow || plates.isNotEmpty() || chrome == Insets.NONE || !ensureGuard()) {
+            if (!appWindow || chrome == Insets.NONE || !ensureGuard()) {
                 removeSystemBars(root)
                 return
             }
@@ -350,6 +458,7 @@ internal class ApplicationGlassHost(
                 barPlate = it
             }
             bars.setBounds(0, 0, root.width, root.height)
+            bars.invalidateSelf()
         }
 
         private fun removeSystemBars(root: View) {
@@ -357,18 +466,26 @@ internal class ApplicationGlassHost(
             barPlate = null
         }
 
-        private fun scan(view: View, depth: Int) {
-            if (budget-- <= 0 || depth > MAX_DEPTH || !view.isShown || view is SurfaceView || view is TextureView) return
-            val radius = corner(view)
-            if (radius != null && view.width > 0 && view.height > 0) {
-                bind(view, radius)
-                return
-            }
-            if (view is ViewGroup) {
-                for (index in 0 until view.childCount) {
-                    if (budget <= 0) break
-                    scan(view.getChildAt(index), depth + 1)
+        private fun scanBatch(root: View) {
+            val dedicated = panel.get()
+            var remaining = VIEWS_PER_BATCH
+            while (remaining-- > 0 && pending.isNotEmpty()) {
+                val view = pending.removeFirst()
+                if (!view.isShown || view.rootView !== root || view is SurfaceView || view is TextureView) continue
+                val radius = corner(view, ime) ?: if (view === dedicated) 24 else null
+                if (radius != null && view.width > 0 && view.height > 0) bind(view, radius)
+                if (view is ViewGroup) {
+                    for (index in view.childCount - 1 downTo 0) pending.addFirst(view.getChildAt(index))
                 }
+            }
+            updateSystemBars(root)
+            if (pending.isEmpty() && scanAgain) {
+                scanAgain = false
+                pending.addLast(dedicated ?: root)
+            }
+            if (pending.isNotEmpty()) {
+                scanPosted = true
+                root.postOnAnimation(continueScan)
             }
         }
 
@@ -377,11 +494,12 @@ internal class ApplicationGlassHost(
             if (old?.overlay == true || (old != null && old === view.background)) return
             if (!ensureGuard()) return
             material.tint = config.tint
+            val canvasToolbar = ApplicationGlassTargets.usesOverlay(app.packageName, view.javaClass.name)
             val hostedCard = generateSequence(view.javaClass as Class<*>?) { it.superclass }
                 .any { it.name == "androidx.cardview.widget.CardView" }
-            val layer = Plate(view, view.background, corner, hostedCard)
+            val layer = Plate(view, view.background, corner, hostedCard || canvasToolbar, canvasToolbar)
             plates[view] = layer
-            if (hostedCard) {
+            if (layer.overlay) {
                 layer.setBounds(0, 0, view.width, view.height)
                 view.overlay.add(layer)
             } else {
@@ -402,6 +520,10 @@ internal class ApplicationGlassHost(
         }
 
         fun restore() {
+            if (scanPosted) root.get()?.removeCallbacks(continueScan)
+            scanPosted = false
+            scanAgain = false
+            pending.clear()
             plates.entries.toList().forEach { (view, plate) -> unbind(view, plate) }
             root.get()?.let(::removeSystemBars)
         }
@@ -421,6 +543,8 @@ internal class ApplicationGlassHost(
         private inner class SystemBarPlate(view: View) : Drawable() {
             private val view = WeakReference(view)
             private val square = FloatArray(8)
+            private val rootLocation = IntArray(2)
+            private val plateLocation = IntArray(2)
 
             override fun draw(canvas: Canvas) {
                 val root = view.get() ?: return
@@ -428,24 +552,34 @@ internal class ApplicationGlassHost(
                 val insets = root.rootWindowInsets ?: return
                 val status = insets.getInsets(WindowInsets.Type.statusBars())
                 val navigation = insets.getInsets(WindowInsets.Type.navigationBars())
+                val caption = insets.getInsets(WindowInsets.Type.captionBar())
                 val appearance = root.windowInsetsController?.systemBarsAppearance ?: 0
                 val darkStatus = appearance and WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS == 0
                 val darkNavigation = appearance and WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS == 0
                 val width = bounds.width().toFloat()
                 val height = bounds.height().toFloat()
+                val top = maxOf(status.top, caption.top, navigation.top).toFloat()
+                val darkCaption = root.resources.configuration.isNightModeActive
                 safely {
-                    material.tint = config.tint
-                    if (status.top > 0) paint(canvas, 0f, 0f, width, status.top.toFloat(), darkStatus)
-                    if (navigation.bottom > 0) {
+                    val saved = canvas.save()
+                    try {
+                        root.getLocationInWindow(rootLocation)
+                        for (plate in plates.keys) {
+                            if (!plate.isShown) continue
+                            plate.getLocationInWindow(plateLocation)
+                            val left = plateLocation[0] - rootLocation[0]
+                            val y = plateLocation[1] - rootLocation[1]
+                            canvas.clipOutRect(left, y, left + plate.width, y + plate.height)
+                        }
+                        material.tint = config.tint
+                        paint(canvas, 0f, 0f, width, status.top.toFloat(), darkStatus)
+                        paint(canvas, 0f, status.top.toFloat(), width, caption.top.toFloat(), darkCaption)
+                        paint(canvas, 0f, maxOf(status.top, caption.top).toFloat(), width, navigation.top.toFloat(), darkNavigation)
                         paint(canvas, 0f, height - navigation.bottom, width, height, darkNavigation)
-                    }
-                    if (navigation.left > 0) {
-                        paint(canvas, 0f, status.top.toFloat(), navigation.left.toFloat(),
-                            height - navigation.bottom, darkNavigation)
-                    }
-                    if (navigation.right > 0) {
-                        paint(canvas, width - navigation.right, status.top.toFloat(), width,
-                            height - navigation.bottom, darkNavigation)
+                        paint(canvas, 0f, top, navigation.left.toFloat(), height - navigation.bottom, darkNavigation)
+                        paint(canvas, width - navigation.right, top, width, height - navigation.bottom, darkNavigation)
+                    } finally {
+                        canvas.restoreToCount(saved)
                     }
                 }
             }
@@ -464,7 +598,7 @@ internal class ApplicationGlassHost(
         }
 
         private inner class Plate(
-            view: View, val stock: Drawable?, private val corner: Int, val overlay: Boolean,
+            view: View, val stock: Drawable?, private val corner: Int, val overlay: Boolean, private val canvasToolbar: Boolean,
         ) : DrawableWrapper(if (overlay) null else stock) {
             private val view = WeakReference(view)
             private val shape = Rect()
@@ -487,7 +621,8 @@ internal class ApplicationGlassHost(
                     radii.fill(radius.coerceAtMost(minOf(shape.width(), shape.height()) * .5f))
                     material.drawSurface(canvas, shape.left.toFloat(), shape.top.toFloat(), shape.right.toFloat(),
                         shape.bottom.toFloat(), radii, config.strength, target.resources.configuration.isNightModeActive,
-                        fill = !overlay, rim = true, profile = GlassMaterial.Profile.SYSTEM_SURFACE)
+                        fill = !overlay || canvasToolbar, rim = true, opacity = if (canvasToolbar) .45f else 1f,
+                        profile = GlassMaterial.Profile.SYSTEM_SURFACE)
                     didDraw()
                 }
             }
@@ -514,8 +649,13 @@ internal class ApplicationGlassHost(
 
     private companion object {
         const val REDUCE_TRANSPARENCY = "accessibility_reduce_transparency"
-        const val MAX_DEPTH = 12
-        const val MAX_VIEWS = 240
+        const val VIEWS_PER_BATCH = 240
+        val PRIVATE_INPUT_TYPES = setOf(
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD,
+        )
         val COMMON_WIDGETS = mapOf(
             "androidx.appcompat.widget.Toolbar" to 0,
             "androidx.appcompat.widget.ActionBarContainer" to 0,

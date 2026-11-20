@@ -3,10 +3,12 @@ package dev.ryuya.galaxyglass
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.inputmethodservice.InputMethodService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.UserManager
 import android.util.Log
 import dev.ryuya.galaxyglass.GlassTargets.CAPTURE
 import dev.ryuya.galaxyglass.GlassTargets.CAPTURE_SETTING
@@ -32,11 +34,12 @@ class HookEntry : XposedModule() {
 
     override fun onPackageReady(param: PackageReadyParam) {
         val target = param.packageName
-        if (!param.isFirstPackage || Process.myUid() / 100000 != 0) return
+        if (!param.isFirstPackage) return
         if (target !in HOSTS) {
             attachApplicationGlass(param)
             return
         }
+        if (Process.myUid() / 100000 != 0) return
         val supported = if (target == CAPTURE) GlassTargets.supportsCaptureGlass() else GlassTargets.supportsSystemGlass()
         if (!supported) return
         val helper = target == SYSTEM_UI && CrashGuard.isSystemUiAppearanceHelper(process)
@@ -79,35 +82,84 @@ class HookEntry : XposedModule() {
         ModernHook.aroundMethod(attach) { chain ->
             val result = chain.proceed()
             val app = chain.thisObject as Application
-            if (app.packageName == param.packageName) {
-                // A scoped app's push, sync and service processes may never build an Activity.
-                // Prepare rendering before the first Activity creates its view hierarchy.
-                app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-                    override fun onActivityPreCreated(activity: Activity, state: Bundle?) {
-                        app.unregisterActivityLifecycleCallbacks(this)
-                        val firstActivity = WeakReference(activity)
-                        runCatching {
-                            HostStartupGate.whenUnlocked(app) {
-                                runCatching {
-                                    val prefs = getRemotePreferences(ApplicationGlassConfig.REMOTE)
-                                    ApplicationGlassHost(app, prefs, process).start(firstActivity.get()?.takeUnless(Activity::isDestroyed))
-                                }.onFailure { log("GLASS_APP_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
-                            }
-                        }.onFailure { log("GLASS_APP_START_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
-                    }
-
-                    override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
-                    override fun onActivityStarted(activity: Activity) = Unit
-                    override fun onActivityResumed(activity: Activity) = Unit
-                    override fun onActivityPaused(activity: Activity) = Unit
-                    override fun onActivityStopped(activity: Activity) = Unit
-                    override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
-                    override fun onActivityDestroyed(activity: Activity) = Unit
-                })
-                log("GLASS_APP_SCOPE_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
+            if (app.packageName == param.packageName &&
+                (Process.myUid() / 100000 == 0 ||
+                    app.getSystemService(UserManager::class.java)?.isManagedProfile == true)) {
+                prepareApplicationGlass(app)
             }
             result
         }
+    }
+
+    private fun prepareApplicationGlass(app: Application) {
+        var host: ApplicationGlassHost? = null
+        var waitingForUnlock = false
+        var attempts = 0
+        var activity = WeakReference<Activity>(null)
+        var inputMethod = WeakReference<InputMethodService>(null)
+        lateinit var lifecycle: Application.ActivityLifecycleCallbacks
+        fun start() {
+            if (waitingForUnlock || host != null || attempts >= 3) return
+            waitingForUnlock = true
+            runCatching {
+                HostStartupGate.whenUnlocked(app) {
+                    waitingForUnlock = false
+                    attempts++
+                    runCatching {
+                        val prefs = getRemotePreferences(ApplicationGlassConfig.REMOTE)
+                        val renderer = ApplicationGlassHost(app, prefs, process)
+                        // Install hooks once even if a later part of startup fails.
+                        host = renderer
+                        app.unregisterActivityLifecycleCallbacks(lifecycle)
+                        renderer.start(activity.get()?.takeUnless(Activity::isDestroyed))
+                        inputMethod.get()?.let(renderer::bindInputMethod)
+                    }.onFailure { log("GLASS_APP_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+                    if (attempts >= 3) app.unregisterActivityLifecycleCallbacks(lifecycle)
+                }
+            }.onFailure {
+                waitingForUnlock = false
+                attempts++
+                log("GLASS_APP_START_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}")
+            }
+        }
+        lifecycle = object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityPreCreated(current: Activity, state: Bundle?) {
+                activity = WeakReference(current)
+                start()
+            }
+
+            override fun onActivityPostResumed(current: Activity) {
+                if (host == null && !waitingForUnlock) {
+                    activity = WeakReference(current)
+                    start()
+                }
+            }
+
+            override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+            override fun onActivityStarted(activity: Activity) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivityStopped(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        }
+        app.registerActivityLifecycleCallbacks(lifecycle)
+        if (ApplicationGlassTargets.hasInputMethodSurfaces(app.packageName)) runCatching {
+            val onCreate = InputMethodService::class.java.getMethod("onCreate")
+            ModernHook.aroundMethod(onCreate) { chain ->
+                val result = chain.proceed()
+                val service = chain.thisObject as InputMethodService
+                if (service.packageName == app.packageName) {
+                    inputMethod = WeakReference(service)
+                    val running = host
+                    if (running == null) start() else runCatching {
+                        running.bindInputMethod(service)
+                    }.onFailure { log("GLASS_APP_INPUT_METHOD_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+                }
+                result
+            }
+        }.onFailure { log("GLASS_APP_INPUT_METHOD_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
+        log("GLASS_APP_SCOPE_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
     }
 
     companion object {

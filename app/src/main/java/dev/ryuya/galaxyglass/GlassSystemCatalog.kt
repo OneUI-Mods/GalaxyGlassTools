@@ -194,6 +194,13 @@ internal object GlassSystemCatalog {
             "action_skip_previous", "action_skip_next"),
 
         // Window-management controls. These never select a hosted app surface.
+        root("caption_window_decor", 12),
+        roundedPlate("desktop_mode_app_header", 12, "desktop_mode_caption"),
+        roundedPlate("desktop_mode_fullscreen_header", 12, "desktop_mode_caption"),
+        roundedPlate("desktop_mode_app_handle", 8, "caption_handle"),
+        root("desktop_mode_app_pinned", 12),
+        roundedPlate("mw_caption_menu", 12, "desktop_mode_caption"),
+        roundedPlate("mw_dex_caption_menu", 12, "desktop_mode_caption"),
         root("bubble_manage_menu"),
         Layout("bubble_bar_drop_target", listOf(Anchor("bubble_bar_drop_target", keepFill = true))),
         plate("bubble_bar_menu_view", "bubble_bar_manage_menu_bubble_section", "bubble_bar_manage_menu_actions_section"),

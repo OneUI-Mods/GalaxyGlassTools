@@ -24,4 +24,17 @@ class ApplicationGlassTargetsTest {
         }
         assertFalse(ApplicationGlassTargets.hasUiActivity("android.app.AppDetailsActivity"))
     }
+
+    @Test
+    fun keepsInputMethodAndCustomToolbarAnchorsWithinTheirSystemPackages() {
+        val samsung = "com.samsung.android.honeyboard"
+        assertTrue(ApplicationGlassTargets.hasInputMethodSurfaces(samsung))
+        assertTrue("keyboard_background" in ApplicationGlassTargets.inputMethodPlates(samsung))
+        assertTrue("clipboardPanel" in ApplicationGlassTargets.inputMethodPlates(samsung))
+        assertFalse(ApplicationGlassTargets.hasInputMethodSurfaces("example.keyboard"))
+        val toolbar = "org.chromium.chrome.browser.toolbar.top.ToolbarPhone"
+        assertTrue(ApplicationGlassTargets.usesOverlay("com.android.chrome", toolbar))
+        assertFalse(ApplicationGlassTargets.usesOverlay("example.browser", toolbar))
+        assertTrue("sem_more_apps_grid_view" in ApplicationGlassTargets.plates("com.android.intentresolver"))
+    }
 }

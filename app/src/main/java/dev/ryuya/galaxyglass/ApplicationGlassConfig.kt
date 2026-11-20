@@ -33,6 +33,8 @@ internal data class ApplicationGlassConfig(val strength: Int, val tint: Int) {
 }
 
 internal object ApplicationGlassTargets {
+    private const val SAMSUNG_KEYBOARD = "com.samsung.android.honeyboard"
+
     fun includes(app: ApplicationInfo): Boolean = includes(app.packageName, app.flags, app.enabled)
 
     fun includes(packageName: String, flags: Int, enabled: Boolean): Boolean =
@@ -48,11 +50,29 @@ internal object ApplicationGlassTargets {
                 PackageManager.MATCH_DISABLED_COMPONENTS).toLong(),
         )
         return pm.getInstalledPackages(flags)
-            .filter { info -> info.applicationInfo?.let(::includes) == true && info.activities.orEmpty().any { hasUiActivity(it.name) } }
+            .filter { info ->
+                info.applicationInfo?.let(::includes) == true &&
+                    (hasInputMethodSurfaces(info.packageName) || info.activities.orEmpty().any { hasUiActivity(it.name) })
+            }
             .map { it.packageName }
             .distinct()
             .sorted()
     }
+
+    fun hasInputMethodSurfaces(packageName: String): Boolean = inputMethodPlates(packageName).isNotEmpty()
+
+    fun inputMethodPlates(packageName: String): Map<String, Int> =
+        if (packageName == SAMSUNG_KEYBOARD) SAMSUNG_INPUT_PLATES else emptyMap()
+
+    private val SAMSUNG_INPUT_PLATES = mapOf(
+        "keyboard_background" to 18,
+        "candidate_view" to 12,
+        "clipboardPanel" to 20,
+        "toolbar_background_layout" to 16,
+        "toolbar_root_window" to 20,
+    )
+
+    val sheetPlates = mapOf("design_bottom_sheet" to 24)
 
     // The resource IDs come from these apps' own BZI9 APKs. IDs absent in another version are skipped.
     fun plates(packageName: String): Map<String, Int> = when (packageName) {
@@ -72,6 +92,26 @@ internal object ApplicationGlassTargets {
         "com.sec.android.app.camera" -> mapOf("capture_ai_bottom_action" to 24)
         "com.sec.android.app.myfiles" -> mapOf("myfiles_search_plate" to 22, "dialog_bottom_menu" to 24)
         "com.google.android.documentsui", "com.android.documentsui" -> mapOf("search_plate" to 22)
+        "com.android.intentresolver", "com.google.android.intentresolver" -> mapOf(
+            "chooser_dialog_content" to 24,
+            "resolver_profile_tab_button" to 20,
+            "sem_chooser_select_apps_fragment_root_view" to 24,
+            "sem_more_apps_grid_view" to 22,
+        )
+        "com.android.chrome" -> mapOf(
+            "toolbar" to 0,
+            "location_bar_background_view" to 22,
+            "hub_toolbar" to 0,
+        )
         else -> emptyMap()
     }
+
+    fun usesOverlay(packageName: String, className: String): Boolean =
+        packageName == "com.android.chrome" && className in CHROME_CANVAS_TOOLBARS
+
+    private val CHROME_CANVAS_TOOLBARS = setOf(
+        "org.chromium.chrome.browser.toolbar.top.ToolbarPhone",
+        "org.chromium.chrome.browser.toolbar.top.ToolbarTablet",
+        "org.chromium.chrome.browser.hub.HubToolbarView",
+    )
 }

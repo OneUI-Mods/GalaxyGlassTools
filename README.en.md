@@ -10,7 +10,9 @@ An Android module for glass effects in Galaxy SystemUI, One UI Home, Samsung Cap
 4. To include other system apps, select **Add all system apps to scope** and approve the request in your Xposed manager.
 5. Reopen those apps or reload the selected SystemUI and launcher processes.
 
-System app glass covers standard toolbars, tabs, search bars, navigation, cards, dialogs and popups. System apps with custom rendering can receive glass in the visible Android status and navigation bar regions. Settings, Phone, Contacts, Gallery, Camera, My Files and DocumentsUI also have app-specific view targets. Authentication and protected windows keep their native appearance.
+The system-app adapter styles toolbars, tabs, search bars, navigation, cards, dialogs, popups, and bottom sheets. It includes dedicated drawing paths for the share sheet, Samsung Keyboard backgrounds and candidates, and the preinstalled Chrome toolbar. The SystemUI adapter covers DeX title bars. To use it in a work profile, add that profile's system apps to the Vector scope.
+
+Authentication screens, protected windows, and the keyboard during password entry retain their native appearance.
 
 The main rendering contract targets Android 17 BZI9 on the Galaxy S26 Ultra (SM-S948Q). Android 16 AZHL has a separate Samsung Capture path. The local preview is available without enabling the module.
 
