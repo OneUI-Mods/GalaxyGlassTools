@@ -20,7 +20,7 @@ internal object HostStartupGate {
             ready(null)
             return
         }
-        val tracksHome = app.packageName == HookEntry.LAUNCHER
+        val tracksHome = app.packageName == GlassTargets.LAUNCHER
         var home = WeakReference<Activity>(null)
         val lifecycle =
             object : Application.ActivityLifecycleCallbacks {

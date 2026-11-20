@@ -33,8 +33,8 @@ internal object GlassSettings {
         if (!prefs.getBoolean(CAPTURE_IMPORTED, false)) {
             legacy(context, CAPTURE_ID, CAPTURE_CERT)?.let { incoming ->
                 val change = prefs.edit()
-                if (!prefs.contains(HookEntry.CAPTURE_SETTING)) {
-                    change.putBoolean(HookEntry.CAPTURE_SETTING, incoming.getBoolean(HookEntry.CAPTURE_SETTING))
+                if (!prefs.contains(GlassTargets.CAPTURE_SETTING)) {
+                    change.putBoolean(GlassTargets.CAPTURE_SETTING, incoming.getBoolean(GlassTargets.CAPTURE_SETTING))
                 }
                 change.putBoolean(CAPTURE_IMPORTED, true).apply()
             }
@@ -60,7 +60,7 @@ internal object GlassSettings {
         val captureReady = prefs.getBoolean(CAPTURE_IMPORTED, false)
         return Bundle().apply {
             for (key in homeKeys) putBoolean(key, enabled && homeReady && prefs.getBoolean(key, false))
-            putBoolean(HookEntry.CAPTURE_SETTING, enabled && captureReady && prefs.getBoolean(HookEntry.CAPTURE_SETTING, false))
+            putBoolean(GlassTargets.CAPTURE_SETTING, enabled && captureReady && prefs.getBoolean(GlassTargets.CAPTURE_SETTING, false))
             putInt(GlassAppearance.STRENGTH, prefs.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH).coerceIn(0, 100))
             putInt(GlassAppearance.TINT, GlassAppearance.tintPercent(prefs.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT)))
             putInt("volume", prefs.getInt("volume", 0).coerceIn(0, 2))

@@ -16,8 +16,8 @@ internal class GlassCaptureHost(private val app: Application, private val loader
     fun start() {
         CaptureToolbarGlass.install(runtime, loader)
         val glass = RecordingStartGlass(runtime)
-        if (Application.getProcessName() == "${HookEntry.CAPTURE}:screenrecorder" ||
-            Application.getProcessName() == HookEntry.CAPTURE) installDialogs(glass)
+        if (Application.getProcessName() == "${GlassTargets.CAPTURE}:screenrecorder" ||
+            Application.getProcessName() == GlassTargets.CAPTURE) installDialogs(glass)
         app.contentResolver.registerContentObserver(ConfigProvider.URI, false, object : ContentObserver(main) {
             override fun onChange(selfChange: Boolean) = read()
         })
@@ -30,7 +30,7 @@ internal class GlassCaptureHost(private val app: Application, private val loader
                 app.contentResolver.call(ConfigProvider.URI, "config", null, null)
             }.getOrNull()
             main.post {
-                runtime.update(config?.getBoolean(HookEntry.CAPTURE_SETTING) == true,
+                runtime.update(config?.getBoolean(GlassTargets.CAPTURE_SETTING) == true,
                     config?.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH) ?: 0)
             }
         }
@@ -98,6 +98,6 @@ internal class GlassCaptureRuntime(val context: Context, private val worker: jav
     }
 
     private fun report(state: String) {
-        worker.execute { HostStatus.reportFeature(context, HookEntry.CAPTURE_SETTING, state, "", BuildConfig.VERSION_CODE) }
+        worker.execute { HostStatus.reportFeature(context, GlassTargets.CAPTURE_SETTING, state, "", BuildConfig.VERSION_CODE) }
     }
 }

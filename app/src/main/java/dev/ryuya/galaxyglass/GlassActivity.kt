@@ -44,7 +44,7 @@ class GlassActivity : AppCompatActivity() {
         val master = requireViewById<MaterialSwitch>(R.id.glass_enabled)
         val capture = requireViewById<MaterialSwitch>(R.id.glass_capture)
         master.isChecked = prefs.getBoolean("enabled", true)
-        capture.isChecked = prefs.getBoolean(HookEntry.CAPTURE_SETTING, false)
+        capture.isChecked = prefs.getBoolean(GlassTargets.CAPTURE_SETTING, false)
         val preview = requireViewById<GlassPreview>(R.id.glass_preview)
         val quick = requireViewById<MaterialSwitch>(R.id.glass_quick)
         val notifications = requireViewById<MaterialSwitch>(R.id.glass_notifications)
@@ -56,7 +56,7 @@ class GlassActivity : AppCompatActivity() {
         val value = requireViewById<TextView>(R.id.glass_value)
         val tintSlider = requireViewById<Slider>(R.id.glass_tint)
         val tintValue = requireViewById<TextView>(R.id.glass_tint_value)
-        val supported = HookEntry.captureSupported()
+        val supported = GlassTargets.supportsCaptureGlass()
         requireViewById<TextView>(R.id.glass_requirements).setText(
             when {
                 !supported -> R.string.glass_preview_only
@@ -76,7 +76,7 @@ class GlassActivity : AppCompatActivity() {
         ).toFloat()
         val status = requireViewById<TextView>(R.id.glass_live_status)
         for (control in listOf(quick, notifications, volume, systemSurfaces, lockScreen, home)) {
-            control.isEnabled = HookEntry.supported() || !supported
+            control.isEnabled = GlassTargets.supportsSystemGlass() || !supported
         }
         statePrefs = getSharedPreferences("host_status", Context.MODE_PRIVATE)
         if (supported) requireViewById<View>(R.id.glass_surface_diagnostics).apply {
@@ -106,7 +106,7 @@ class GlassActivity : AppCompatActivity() {
                 R.string.glass_system_surfaces to state("com.android.systemui.glass_system_surfaces", systemSurfaces.isChecked),
                 R.string.glass_lock_screen to state("com.android.systemui.glass_lock_screen", lockScreen.isChecked),
                 R.string.glass_home to state("com.sec.android.app.launcher.glass_home", home.isChecked),
-                R.string.glass_capture to state("${HookEntry.CAPTURE}.${HookEntry.CAPTURE_SETTING}", capture.isChecked),
+                R.string.glass_capture to state("${GlassTargets.CAPTURE}.${GlassTargets.CAPTURE_SETTING}", capture.isChecked),
             )
             status.visibility = View.VISIBLE
             status.text = rows.joinToString("\n") { (name, result) -> getString(R.string.glass_status_line, getString(name), getString(result)) }
@@ -136,7 +136,7 @@ class GlassActivity : AppCompatActivity() {
         for ((control, key) in listOf(quick to GlassAppearance.QUICK,
                    notifications to GlassAppearance.NOTIFICATIONS, volume to GlassAppearance.VOLUME,
                    systemSurfaces to GlassAppearance.SYSTEM_SURFACES, lockScreen to GlassAppearance.LOCK_SCREEN,
-                   home to GlassAppearance.HOME, master to "enabled", capture to HookEntry.CAPTURE_SETTING)) {
+                   home to GlassAppearance.HOME, master to "enabled", capture to GlassTargets.CAPTURE_SETTING)) {
             control.setOnCheckedChangeListener { _, enabled ->
                 if (supported) prefs.edit().putBoolean(key, enabled).apply()
                 display()

@@ -19,7 +19,7 @@ class ConfigProvider : ContentProvider() {
         val uid = Binder.getCallingUid()
         val host = callingPackage
         val self = uid == Process.myUid()
-        val knownHost = uid / 100000 == 0 && host in HookEntry.HOSTS &&
+        val knownHost = uid / 100000 == 0 && host in GlassTargets.HOSTS &&
             app.packageManager.getPackagesForUid(uid)?.contains(host) == true
         if (!self && !knownHost) throw SecurityException("Unsupported caller")
         return when (method) {

@@ -67,7 +67,7 @@ internal class GlassHost(
     private val surfaceStages = mutableMapOf<String, GlassSurfaceStage>()
 
     fun start() {
-        if (Build.VERSION.SDK_INT < 33 || !HookEntry.supported()) return
+        if (Build.VERSION.SDK_INT < 33 || !GlassTargets.supportsSystemGlass()) return
         if (briefOnly) popups = createPopups()
         if (systemUi && !briefOnly && !systemSurfacesOnly) {
             volumePlugin = runCatching { VolumePluginDiscovery(loader) }

@@ -10,6 +10,6 @@ internal enum class GlassSurfaceStage(val label: Int) {
     companion object {
         const val FEATURE_PREFIX = "glass_surface_"
         const val SYSTEM_STATUS_PREFIX = "com.android.systemui." + FEATURE_PREFIX
-        const val HOME_STATUS_PREFIX = HookEntry.LAUNCHER + "." + FEATURE_PREFIX
+        const val HOME_STATUS_PREFIX = GlassTargets.LAUNCHER + "." + FEATURE_PREFIX
     }
 }
