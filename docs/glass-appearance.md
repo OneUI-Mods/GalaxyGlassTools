@@ -8,7 +8,7 @@ The layout and resource inventory comes from the installed SM-S948Q BZI9 SystemU
 
 | Area | Plates |
 | --- | --- |
-| Quick Panel details | Samsung detail cards, the SIM selection bar and its separate Compose popup, quick controls, the header edit, power and settings buttons, the device-management footer and user switcher dialogs. Internet, Bluetooth, hearing devices and their ambient-volume expand control, audio sharing, external display, font size, Do Not Disturb and airplane mode dialogs. |
+| Quick Panel details | Samsung tile detail panel backgrounds, the SIM selection bar and its separate Compose popup, quick controls, the header edit, power and settings buttons and their long-press tooltips, the device-management footer and user switcher dialogs. Internet, Bluetooth, hearing devices and their ambient-volume expand control, audio sharing, external display, font size, Do Not Disturb and airplane mode dialogs. |
 | Media and privacy | Full media cards, output controls, media option buttons, carousel settings and track popups, privacy dialogs and ongoing activity chips. |
 | Panel controls | Notification channel controls, suggested actions and replies, snooze, the Do Not Disturb banner, notification group buttons, the notification shelf and footer actions including Samsung's Notification settings and Clear buttons. Quick Panel tile editing areas and their buttons and popup options. |
 | Overlay cards | Clipboard preview frame and editor controls, AOSP screenshot action shelf, status and connected display chips, text toasts, gesture hints and accessibility tooltips. |

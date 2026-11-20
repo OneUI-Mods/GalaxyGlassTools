@@ -34,6 +34,9 @@ internal class GlassQuickTiles(
         SIM_BAR(GlassMaterial.Profile.QUICK_GROUP),
         SIM_POPUP(GlassMaterial.Profile.SYSTEM_SURFACE),
         HEADER_ACTION(GlassMaterial.Profile.QUICK_CONTROL),
+        DETAIL_PANEL(GlassMaterial.Profile.SYSTEM_SURFACE),
+        HEADER_TOOLTIP(GlassMaterial.Profile.SYSTEM_SURFACE),
+        SECURITY_FOOTER(GlassMaterial.Profile.QUICK_CONTROL),
         EDITOR(GlassMaterial.Profile.SYSTEM_SURFACE),
     }
     private data class Clip(val surface: Surface, val nativeShape: Any)
@@ -158,8 +161,98 @@ internal class GlassQuickTiles(
             .onFailure { HookEntry.log("GLASS_QUICK_SIM_POPUP_UNAVAILABLE ${it.javaClass.simpleName}") }
         runCatching { installHeaderActions(loader, resources, modifier, then, ::overlay) }
             .onFailure { HookEntry.log("GLASS_QUICK_HEADER_ACTIONS_UNAVAILABLE ${it.javaClass.simpleName}") }
+        runCatching { installDetailAndTooltip(loader, modifier, then, ::overlay) }
+            .onFailure { HookEntry.log("GLASS_QUICK_DETAIL_BACKGROUND_UNAVAILABLE ${it.javaClass.simpleName}") }
+        runCatching { installSecurityFooter(loader, modifier, then, ::overlay) }
+            .onFailure { HookEntry.log("GLASS_QUICK_SECURITY_FOOTER_UNAVAILABLE ${it.javaClass.simpleName}") }
         runCatching { installEditorSurfaces(loader, resources, modifier, then, ::overlay) }
             .onFailure { HookEntry.log("GLASS_QUICK_EDITOR_UNAVAILABLE ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
+    private fun installDetailAndTooltip(loader: ClassLoader, modifier: Class<*>, then: Method,
+        overlay: (Surface, Any) -> Any) {
+        fun type(name: String) = DexSymbols.findClass(name, false, loader)
+        val shape = type("androidx.compose.ui.graphics.Shape")
+        val rounded = type("androidx.compose.foundation.shape.RoundedCornerShape")
+        val fill = type("androidx.compose.foundation.BackgroundKt").getDeclaredMethod("background-bw27NRU",
+            modifier, Long::class.javaPrimitiveType, shape)
+        val active = ThreadLocal<Surface>()
+        val handles = mutableListOf<ModernHook.Handle>()
+        try {
+            handles += ModernHook.aroundMethod(fill) { chain ->
+                val surface = active.get() ?: return@aroundMethod chain.proceed()
+                val nativeShape = chain.args[2] ?: return@aroundMethod chain.proceed()
+                if (!rounded.isInstance(nativeShape)) return@aroundMethod chain.proceed()
+                val stock = chain.args[1] as Long
+                if (stock and 0xffffffffL != 0L || stock ushr 56 == 0L) return@aroundMethod chain.proceed()
+                active.remove()
+                val args = chain.args.toTypedArray()
+                val alpha = ((stock ushr 56) * (1f - .55f * level() / 100f)).toInt()
+                args[1] = (stock and 0x00ffffffffffffffL) or (alpha.toLong() shl 56)
+                then.invoke(chain.proceed(args), overlay(surface, nativeShape))
+            }
+            val detailOwner = type("com.android.systemui.samsung.quicksetting.ui.details.PopupDetailSceneKt")
+            val detail = detailOwner.declaredMethods.single {
+                it.name == "DetailBG-J5j9r9c" && it.parameterTypes.getOrNull(1) == modifier
+            }
+            handles += scopeRenderer(detail, Surface.DETAIL_PANEL, active)
+            HookEntry.log("GLASS_QUICK_DETAIL_BACKGROUND_READY")
+            runCatching {
+                // The Quick Panel supplies a PlainTooltip with its own rounded shape to SESL's popup.
+                // Prevent compiled Surface callers from inlining past the background hook.
+                val materialSurface = type("androidx.compose.material3.SurfaceKt")
+                ModernHook.deoptimize(materialSurface.declaredMethods.single { it.name == "surface-XO-JAsU" })
+                val surfaceContent = type("androidx.compose.material3.SurfaceKt\$\$ExternalSyntheticLambda0")
+                ModernHook.deoptimize(surfaceContent.getDeclaredMethod("invoke", Any::class.java, Any::class.java))
+                val headerTooltip = type("com.android.systemui.samsung.quicksetting.ui.panel.SecQuickSettingHeaderKt\$\$ExternalSyntheticLambda5")
+                    .getDeclaredMethod("invoke", Any::class.java, Any::class.java, Any::class.java)
+                handles += scopeRenderer(headerTooltip, Surface.HEADER_TOOLTIP, active)
+                HookEntry.log("GLASS_QUICK_TOOLTIP_BACKGROUND_READY")
+            }.onFailure { HookEntry.log("GLASS_QUICK_TOOLTIP_BACKGROUND_UNAVAILABLE ${it.javaClass.simpleName}") }
+        } catch (error: Throwable) {
+            handles.asReversed().forEach(ModernHook.Handle::unhook)
+            throw error
+        }
+    }
+
+    private fun installSecurityFooter(loader: ClassLoader, modifier: Class<*>, then: Method,
+        overlay: (Surface, Any) -> Any) {
+        fun type(name: String) = DexSymbols.findClass(name, false, loader)
+        val owner = type("com.android.systemui.samsung.quicksetting.ui.banner.SecurityFooterKt\$\$ExternalSyntheticLambda0")
+        val footer = owner.getDeclaredMethod("invoke", Any::class.java, Any::class.java, Any::class.java)
+        val fillWidth = type("androidx.compose.foundation.layout.SizeKt").getDeclaredMethod("fillMaxWidth\$default",
+            modifier, Float::class.javaPrimitiveType, Int::class.javaPrimitiveType, Any::class.java)
+        val bodyShape = requireNotNull(type("androidx.compose.foundation.shape.RoundedCornerShapeKt")
+            .getDeclaredMethod("RoundedCornerShape-0680j_4", Float::class.javaPrimitiveType).invoke(null, 18f))
+        val active = ThreadLocal<Surface>()
+        val hook = ModernHook.aroundMethod(fillWidth) { chain ->
+            val result = chain.proceed()
+            if (active.get() != Surface.SECURITY_FOOTER) return@aroundMethod result
+            active.remove()
+            // This call sizes the text-and-icon row inside the footer's deferred content.
+            then.invoke(result, overlay(Surface.SECURITY_FOOTER, bodyShape))
+        }
+        try {
+            scopeRenderer(footer, Surface.SECURITY_FOOTER, active)
+            HookEntry.log("GLASS_QUICK_SECURITY_FOOTER_READY")
+        } catch (error: Throwable) {
+            hook.unhook()
+            throw error
+        }
+    }
+
+    private fun scopeRenderer(renderer: Method, surface: Surface, active: ThreadLocal<Surface>): ModernHook.Handle {
+        ModernHook.deoptimize(renderer)
+        return ModernHook.aroundMethod(renderer) { chain ->
+            if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
+            val previous = active.get()
+            active.set(surface)
+            try {
+                chain.proceed()
+            } finally {
+                if (previous == null) active.remove() else active.set(previous)
+            }
+        }
     }
 
     private fun installSimPopup(loader: ClassLoader, modifier: Class<*>, then: Method,
@@ -387,19 +480,6 @@ internal class GlassQuickTiles(
         require(box.parameterTypes[0] == modifier && box.parameterTypes[4] == Long::class.javaPrimitiveType)
         require(box.parameterTypes[8] == Int::class.javaPrimitiveType)
         val nativeSurface = ThreadLocal<Surface>()
-        fun hookRenderer(renderer: Method, surface: Surface): ModernHook.Handle {
-            ModernHook.deoptimize(renderer)
-            return ModernHook.aroundMethod(renderer) { chain ->
-                if (level() <= 0 || !unlocked() || drawingUnavailable) return@aroundMethod chain.proceed()
-                val previous = nativeSurface.get()
-                nativeSurface.set(surface)
-                try {
-                    chain.proceed()
-                } finally {
-                    if (previous == null) nativeSurface.remove() else nativeSurface.set(previous)
-                }
-            }
-        }
         val handles = mutableListOf<ModernHook.Handle>()
         try {
             handles += ModernHook.aroundMethod(clip) { chain ->
@@ -432,7 +512,7 @@ internal class GlassQuickTiles(
                 chain.proceed(args)
             }
             for ((renderer, surface) in listOf(grid to Surface.GRID, bars to Surface.SLIDER, iconText to Surface.CARD)) {
-                handles += hookRenderer(renderer, surface)
+                handles += scopeRenderer(renderer, surface, nativeSurface)
             }
         } catch (error: Throwable) {
             handles.asReversed().forEach { it.unhook() }
@@ -441,7 +521,7 @@ internal class GlassQuickTiles(
         runCatching {
             // BoxWithConstraints subcomposes Samsung's SIM bar after the entry function returns.
             val renderer = method(tiles + "MultiSIMPreferredBarKt\$\$ExternalSyntheticLambda5", "invoke", 3)
-            hookRenderer(renderer, Surface.SIM_BAR)
+            scopeRenderer(renderer, Surface.SIM_BAR, nativeSurface)
         }.onFailure { HookEntry.log("GLASS_QUICK_SIM_BAR_UNAVAILABLE ${it.javaClass.simpleName}") }
     }
 
