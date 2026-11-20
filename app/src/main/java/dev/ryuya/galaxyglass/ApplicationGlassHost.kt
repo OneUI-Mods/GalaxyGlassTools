@@ -31,6 +31,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.InputType
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.SurfaceView
 import android.view.TextureView
@@ -58,6 +59,11 @@ internal class ApplicationGlassHost(
     private val power = app.getSystemService(PowerManager::class.java)
     private val views = WeakHashMap<View, WindowBinding>()
     private val uninstallDialogs = WeakHashMap<Dialog, WeakReference<Activity>>()
+    private val windowBlurRadius by lazy {
+        runCatching { Window::class.java.getDeclaredField("mBackgroundBlurRadius").apply { isAccessible = true } }
+            .getOrNull()
+    }
+    private val samsungViewBlur by lazy { runCatching { SamsungViewBlur() }.getOrNull() }
     private val activityWindows = WeakHashMap<Activity, WeakReference<View>>()
     private val rolesByType = mutableMapOf<Class<*>, Int?>()
     private val plateNames = ApplicationGlassTargets.plates(app.packageName) + ApplicationGlassTargets.sheetPlates
@@ -228,7 +234,7 @@ internal class ApplicationGlassHost(
                         val uninstallOwner = uninstallDialogs[dialog]?.get()
                         if (uninstallOwner != null) {
                             if (isUninstallConfirmation(uninstallOwner)) {
-                                val panel = dialogPanel(decor)
+                                val panel = decor.takeIf(::hasVisibleBackground) ?: dialogPanel(decor)
                                 if (panel != null) observe(decor, uninstallOwner, window, panel, uninstallPrompt = true)
                             }
                             return@safely
@@ -281,17 +287,17 @@ internal class ApplicationGlassHost(
         val fragment = Class.forName("com.android.packageinstaller.v2.ui.fragments.UninstallationFragment",
             false, app.classLoader)
         val create = fragment.getDeclaredMethod("onCreateDialog")
-        val getActivity = fragment.getMethod("getActivity")
+        val requireActivity = fragment.getMethod("requireActivity")
         check(create.returnType == Dialog::class.java)
         ModernHook.aroundMethod(create) { chain ->
             val result = chain.proceed()
             if (result is Dialog && main.looper.isCurrentThread) safely {
-                val owner = getActivity.invoke(chain.thisObject) as? Activity ?: return@safely
+                val owner = requireActivity.invoke(chain.thisObject) as? Activity ?: return@safely
                 if (isUninstallConfirmation(owner)) uninstallDialogs[result] = WeakReference(owner)
             }
             result
         }
-    }.onFailure { HookEntry.log("GLASS_APP_UNINSTALL_UNAVAILABLE ${it.javaClass.simpleName}") }
+    }.onFailure { HookEntry.log("GLASS_APP_UNINSTALL_UNAVAILABLE ${it.javaClass.simpleName}: ${it.message}") }
 
     override fun onActivityPostResumed(activity: Activity) = safely {
         prepareCompose(activity.classLoader)
@@ -480,6 +486,12 @@ internal class ApplicationGlassHost(
             }
         }
         private var barPlate: SystemBarPlate? = null
+        private var uninstallBlur = 0
+        private var uninstallViewBlur: Any? = null
+        private var uninstallBlurTarget = WeakReference<View>(null)
+        private var uninstallBlurTone = 0
+        private var uninstallViewBlurRadius = 0
+        private var uninstallDrawn = false
 
         override fun onViewAttachedToWindow(view: View) {
             observer = view.viewTreeObserver.also { it.addOnGlobalLayoutListener(this) }
@@ -520,7 +532,11 @@ internal class ApplicationGlassHost(
             }
             if (uninstallPrompt) {
                 val prompt = panel.get() ?: return
-                if (prompt.isShown && prompt.rootView === root && prompt.width > 0 && prompt.height > 0) bind(prompt, 24)
+                if (prompt.isShown && prompt.rootView === root && prompt.width > 0 && prompt.height > 0) {
+                    bind(prompt, 24)
+                    val host = window.get()
+                    if (host != null && plates[prompt] != null) updateUninstallBlur(host, root, prompt)
+                }
                 return
             }
             pending.addLast(panel.get() ?: root)
@@ -576,7 +592,8 @@ internal class ApplicationGlassHost(
 
         private fun bind(view: View, corner: Int) {
             val old = plates[view]
-            if (old?.overlay == true || (old != null && old === view.background)) return
+            val decorPlate = uninstallPrompt && view === root.get()
+            if (old != null && (decorPlate || old.overlay || old === view.background)) return
             if (!ensureGuard()) return
             material.tint = config.tint
             val canvasToolbar = ApplicationGlassTargets.usesOverlay(app.packageName, view.javaClass.name)
@@ -588,15 +605,73 @@ internal class ApplicationGlassHost(
                 layer.setBounds(0, 0, view.width, view.height)
                 view.overlay.add(layer)
             } else {
-                replaceBackground(view, layer)
+                setPlateBackground(view, layer)
                 layer.stock?.callback = layer
             }
+        }
+
+        private fun setPlateBackground(view: View, drawable: Drawable?) {
+            val dialog = window.get()
+            if (uninstallPrompt && view === root.get() && dialog != null) dialog.setBackgroundDrawable(drawable)
+            else replaceBackground(view, drawable)
+        }
+
+        private fun updateUninstallBlur(dialog: Window, root: View, prompt: View) {
+            val density = root.resources.displayMetrics.density
+            val pixels = ((14f + config.strength * .16f) * density).toInt()
+            val wasBlurred = uninstallBlur > 0 || uninstallViewBlur != null
+            uninstallBlur = if (prompt === root) updateSystemDialogBlur(dialog, pixels) else 0
+            if (uninstallBlur > 0) {
+                clearUninstallViewBlur()
+            } else {
+                val target = panelIds.firstNotNullOfOrNull { root.findViewById<View>(it) } ?: prompt
+                val tone = if (root.resources.configuration.isNightModeActive) 0x18232b36 else 0x18eef6ff
+                updateUninstallViewBlur(target, pixels, 24f * density, tone)
+            }
+            if (wasBlurred != (uninstallBlur > 0 || uninstallViewBlur != null)) plates[prompt]?.invalidateSelf()
+        }
+
+        private fun updateSystemDialogBlur(dialog: Window, pixels: Int): Int {
+            val radius = windowBlurRadius ?: return 0
+            val current = radius.getInt(dialog)
+            if (current != 0 && current != uninstallBlur) return 0
+            val value = TypedValue()
+            val translucent = dialog.context.theme.resolveAttribute(android.R.attr.windowIsTranslucent, value, true) &&
+                value.type == TypedValue.TYPE_INT_BOOLEAN && value.data != 0
+            val compositor = dialog.context.getSystemService(WindowManager::class.java)
+            val requested = if (translucent && compositor?.isCrossWindowBlurEnabled == true) pixels else 0
+            if (current != requested) dialog.setBackgroundBlurRadius(requested)
+            return if (radius.getInt(dialog) == requested) requested else 0
+        }
+
+        private fun updateUninstallViewBlur(target: View, pixels: Int, corner: Float, tone: Int) {
+            val blur = samsungViewBlur ?: return
+            if (target.width <= 0 || target.height <= 0) return
+            if (uninstallBlurTarget.get() === target && blur.current(target) === uninstallViewBlur &&
+                uninstallViewBlur != null && uninstallViewBlurRadius == pixels && uninstallBlurTone == tone) return
+            clearUninstallViewBlur()
+            if (blur.current(target) != null) return
+            uninstallViewBlur = blur.apply(target, pixels, corner, tone)
+            if (uninstallViewBlur != null) {
+                uninstallBlurTarget = WeakReference(target)
+                uninstallViewBlurRadius = pixels
+                uninstallBlurTone = tone
+            }
+        }
+
+        private fun clearUninstallViewBlur() {
+            val inserted = uninstallViewBlur ?: return
+            val target = uninstallBlurTarget.get()
+            val blur = samsungViewBlur
+            uninstallViewBlur = null
+            uninstallBlurTarget.clear()
+            if (target != null && blur?.current(target) === inserted) blur.clear(target)
         }
 
         private fun unbind(view: View, plate: Plate) {
             plates.remove(view)
             if (plate.overlay) view.overlay.remove(plate)
-            else if (view.background === plate) replaceBackground(view, plate.stock)
+            else if (view.background === plate || (uninstallPrompt && view === root.get())) setPlateBackground(view, plate.stock)
         }
 
         fun invalidate() {
@@ -605,6 +680,12 @@ internal class ApplicationGlassHost(
         }
 
         fun restore() {
+            clearUninstallViewBlur()
+            if (uninstallBlur > 0) {
+                val dialog = window.get()
+                if (dialog != null && windowBlurRadius?.getInt(dialog) == uninstallBlur) dialog.setBackgroundBlurRadius(0)
+                uninstallBlur = 0
+            }
             root.get()?.let { root ->
                 if (scanPosted) root.removeCallbacks(continueScan)
                 if (rescanPosted) root.removeCallbacks(rescan)
@@ -736,10 +817,19 @@ internal class ApplicationGlassHost(
             private val radii = FloatArray(8)
 
             override fun draw(canvas: Canvas) {
-                super.draw(canvas)
                 val target = view.get() ?: return
                 val windowRoot = root.get() ?: return
-                if (!canvas.isHardwareAccelerated || bounds.isEmpty || !enabled(windowRoot)) return
+                val active = canvas.isHardwareAccelerated && !bounds.isEmpty && enabled(windowRoot)
+                val alphaLayer = if (uninstallPrompt && active && (uninstallBlur > 0 || uninstallViewBlur != null)) {
+                    canvas.saveLayerAlpha(bounds.left.toFloat(), bounds.top.toFloat(), bounds.right.toFloat(),
+                        bounds.bottom.toFloat(), 183)
+                } else null
+                try {
+                    super.draw(canvas)
+                } finally {
+                    if (alphaLayer != null) canvas.restoreToCount(alphaLayer)
+                }
+                if (!active) return
                 safely {
                     val radius = resolveShape(target)
                     radii.fill(radius)
@@ -752,8 +842,15 @@ internal class ApplicationGlassHost(
                     if (material.drawSurface(canvas, shape.left.toFloat(), shape.top.toFloat(), shape.right.toFloat(),
                         shape.bottom.toFloat(), radii, config.strength, target.resources.configuration.isNightModeActive,
                         fill = !overlay || canvasToolbar, rim = !flatBar,
-                        opacity = if (uninstallPrompt) .76f else if (canvasToolbar) .45f else 1f,
-                        profile = profile)) didDraw()
+                        opacity = if (canvasToolbar) .45f else 1f,
+                        profile = profile)) {
+                        didDraw()
+                        if (uninstallPrompt && !uninstallDrawn) {
+                            uninstallDrawn = true
+                            HookEntry.log("GLASS_APP_UNINSTALL_DRAWN build=${BuildConfig.VERSION_CODE}" +
+                                " windowBlur=$uninstallBlur samsungBlur=${uninstallViewBlur != null}")
+                        }
+                    }
                 }
             }
 

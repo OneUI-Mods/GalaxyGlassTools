@@ -4,14 +4,19 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.content.res.Resources
 import android.graphics.Bitmap
-import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.ColorFilter
-import android.graphics.Matrix
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Outline
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.RenderEffect
+import android.graphics.RenderNode
 import android.graphics.Shader
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -170,7 +175,7 @@ internal class GlassLauncherControls(
     private var findLargeFolder: ((View) -> Unit)? = null
     private var tabIndicator: Class<out View>? = null
     private var reportedError = false
-    private var reportedRefraction = false
+    private var reportedFrostedMenu = false
     private var tips: GlassSamsungTips? = null
 
     init {
@@ -731,9 +736,9 @@ internal class GlassLauncherControls(
                     attachMenu(host)
                     fitMenuLabels(host)
                 }
-                Role.ARROW -> if (strength <= 0) restoreTint() else styleTint(host, strength)
+                Role.ARROW -> if (strength <= 0) restoreTint() else styleTint(host)
                 Role.MENU_TITLE -> {
-                    if (strength <= 0) restoreTint() else styleTint(host, strength)
+                    if (strength <= 0) restoreTint() else styleTint(host)
                     updateFolderTitle(host, strength)
                 }
                 Role.SEARCH, Role.FINDER_INPUT, Role.WIDGET_SEARCH, Role.WIDGET_PICKER_SEARCH, Role.OVERLAY_SEARCH ->
@@ -832,7 +837,7 @@ internal class GlassLauncherControls(
             }
         }
 
-        private fun styleTint(host: View, strength: Int) {
+        private fun styleTint(host: View) {
             val stock = host.background
             val supported = if (role == Role.ARROW) stock is ShapeDrawable else stock is ColorDrawable
             if (!supported || stock == null) {
@@ -844,8 +849,8 @@ internal class GlassLauncherControls(
                 attenuated = stock
                 originalAlpha = stock.alpha
             } else if (stock.alpha != appliedAlpha) originalAlpha = stock.alpha
-            val suppression = if (role == Role.MENU_TITLE) 0.0084f else 0.0052f
-            val alpha = (originalAlpha * (1f - strength * suppression)).roundToInt()
+            val remaining = if (role == Role.MENU_TITLE) .10f else .78f
+            val alpha = (originalAlpha * remaining).roundToInt()
             if (stock.alpha != alpha) stock.alpha = alpha
             appliedAlpha = alpha
             didDraw(role)
@@ -872,13 +877,9 @@ internal class GlassLauncherControls(
     private inner class MenuPlate(view: View, val stock: Drawable, density: Float, private val corner: Float) : Drawable() {
         private val host = WeakReference(view)
         private val radii = FloatArray(8)
-        private val transform = Matrix()
-        private var lens: GlassLens? = null
-        private var source: BitmapShader? = null
-        private var sampled: Bitmap? = null
-        private val sourceBounds = Rect()
-        private val screenDensity = density
-        private var refractionUnavailable = false
+        private val contour = Path()
+        private val fitted = RectF()
+        private val frost = MenuFrost(density)
 
         override fun draw(canvas: Canvas) {
             val view = host.get()
@@ -895,71 +896,37 @@ internal class GlassLauncherControls(
                 val bottom = bounds.bottom.toFloat()
                 val radius = corner.coerceIn(0f, minOf(bounds.width(), bounds.height()) / 2f)
                 val night = dark()
-                val refracted = if (refractionUnavailable) false else {
-                    runCatching {
-                        val glassSource = bitmapShader(view) ?: return@runCatching false
-                        val glass = lens ?: GlassLens(screenDensity, menu = true).also { lens = it }
-                        glass.draw(canvas, glassSource, left, top, right, bottom, radius, strength, night,
-                            opacity = strength * .009f, tintFactor = material.tintFactor)
-                        if (!reportedRefraction) {
-                            reportedRefraction = true
-                            HookEntry.log("GLASS_HOME_CONTROL_REFRACTED quick_options")
-                            onSurface(Role.MENU.tag, GlassSurfaceStage.REFRACTED)
-                        }
-                        true
-                    }.getOrElse {
-                        refractionUnavailable = true
-                        release()
-                        HookEntry.log("GLASS_HOME_CONTROL_REFRACTION_UNAVAILABLE quick_options ${it.javaClass.simpleName}")
-                        false
+                val behind = (view.parent as? ViewGroup)?.getChildAt(0)?.takeUnless { it === view }
+                val bitmap = behind?.let { nativeCrop?.bitmap(it) }
+                val frosted = bitmap != null && frost.update(bitmap, bounds.width(), bounds.height(), night, strength)
+                if (frosted) {
+                    fitted.set(bounds)
+                    contour.rewind()
+                    contour.addRoundRect(fitted, radius, radius, Path.Direction.CW)
+                    val saved = canvas.save()
+                    try {
+                        canvas.clipPath(contour)
+                        canvas.translate(left, top)
+                        frost.draw(canvas)
+                    } finally {
+                        canvas.restoreToCount(saved)
                     }
-                }
-                val original = stock.alpha
-                try {
-                    // Keep enough native tint to read the menu over busy wallpaper.
-                    val suppression = if (refracted) 0.0042f else 0.004f
-                    stock.alpha = (original * (1f - strength * suppression)).roundToInt()
+                    if (!reportedFrostedMenu) {
+                        reportedFrostedMenu = true
+                        HookEntry.log("GLASS_HOME_QUICK_OPTIONS_FROSTED build=${BuildConfig.VERSION_CODE}")
+                    }
+                } else {
+                    frost.release()
                     stock.draw(canvas)
-                } finally {
-                    stock.alpha = original
                 }
                 radii.fill(radius)
                 material.drawSurface(canvas, left, top, right, bottom, radii, strength, night,
-                    fill = !refracted, rim = true, opacity = .74f, profile = GlassMaterial.Profile.STANDARD)
+                    fill = true, rim = true, opacity = .70f)
                 didDraw(Role.MENU)
             }
         }
 
-        private fun bitmapShader(view: View): BitmapShader? {
-            val parent = view.parent as? ViewGroup
-            val behind = parent?.getChildAt(0)?.takeUnless { it === view }
-            val bitmap = behind?.let { nativeCrop?.bitmap(it) }
-            if (bitmap == null || bitmap.isRecycled) {
-                release()
-                return null
-            }
-            if (sampled !== bitmap) {
-                sampled = bitmap
-                source = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-                    setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
-                }
-                sourceBounds.setEmpty()
-            }
-            if (sourceBounds != bounds) {
-                sourceBounds.set(bounds)
-                transform.setScale(bounds.width().toFloat() / bitmap.width, bounds.height().toFloat() / bitmap.height)
-                transform.postTranslate(bounds.left.toFloat(), bounds.top.toFloat())
-                source?.setLocalMatrix(transform)
-            }
-            return source
-        }
-
-        fun release() {
-            if (sampled == null) return
-            lens?.clearBackdrop()
-            source = null
-            sampled = null
-        }
+        fun release() = frost.release()
 
         override fun setAlpha(alpha: Int) = stock.setAlpha(alpha)
         override fun setColorFilter(filter: ColorFilter?) = stock.setColorFilter(filter)
@@ -971,6 +938,55 @@ internal class GlassLauncherControls(
         }
         @Deprecated("Required by Drawable")
         override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
+    /** Re-renders Samsung's menu crop once. The menu children stay on their original display list. */
+    private class MenuFrost(density: Float) {
+        private val node = RenderNode("Quick options background")
+        private val destination = RectF()
+        private val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(.38f) })
+        }
+        private var bitmap: Bitmap? = null
+        private var dark = false
+        private var strength = 0
+
+        init {
+            val blur = 16f * density
+            node.setRenderEffect(RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP))
+        }
+
+        fun update(source: Bitmap, width: Int, height: Int, night: Boolean, level: Int): Boolean {
+            if (source.isRecycled || source.width < 2 || source.height < 2) return false
+            if (bitmap === source && node.width == width && node.height == height && dark == night &&
+                strength == level && node.hasDisplayList()) return true
+
+            node.setPosition(0, 0, width, height)
+            val scale = maxOf(width.toFloat() / source.width, height.toFloat() / source.height)
+            val left = (width - source.width * scale) * .5f
+            val top = (height - source.height * scale) * .5f
+            destination.set(left, top, width - left, height - top)
+            paint.alpha = (56 + level * .60f).roundToInt()
+            val canvas = node.beginRecording(width, height)
+            try {
+                canvas.drawColor(if (night) 0xff222731.toInt() else 0xffe2e9f0.toInt())
+                canvas.drawBitmap(source, null, destination, paint)
+            } finally {
+                node.endRecording()
+            }
+            bitmap = source
+            dark = night
+            strength = level
+            return true
+        }
+
+        fun draw(canvas: Canvas) = canvas.drawRenderNode(node)
+
+        fun release() {
+            if (bitmap == null) return
+            bitmap = null
+            node.discardDisplayList()
+        }
     }
 
     private class NativeCrop {
