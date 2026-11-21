@@ -76,16 +76,24 @@ class CrashGuard private constructor(context: Context, fileName: String) {
 
         internal fun enterApplicationGlass(context: Context, process: String): CrashGuard {
             val suffix = process.substringAfter(':', "main").replace(Regex("[^a-zA-Z0-9._-]"), "_")
-            return enter(context, process, "$FILE.systemapp.$suffix")
+            val recovery = if (process == "com.android.chrome") "chrome-custom-tab-background" else null
+            return enter(context, process, "$FILE.systemapp.$suffix", recovery)
         }
 
-        private fun enter(context: Context, processName: String, fileName: String): CrashGuard {
+        private fun enter(
+            context: Context, processName: String, fileName: String, recovery: String? = null,
+        ): CrashGuard {
             val guard = CrashGuard(context, fileName)
             try {
                 guard.file.openRead().use { `in` ->
                     guard.state.load(`in`)
                 }
             } catch (ignored: FileNotFoundException) {}
+            // Retry Chrome once after replacing the background wrapper that could crash Custom Tabs.
+            if (recovery != null && guard.state.getProperty("appearanceRecovery") != recovery) {
+                guard.state.clear()
+                guard.state.setProperty("appearanceRecovery", recovery)
+            }
             val now = System.currentTimeMillis()
             val elapsed = SystemClock.elapsedRealtime()
             var count = guard.state.getProperty("attempts", "0").toInt()
