@@ -45,17 +45,22 @@ internal class GlassPanelBackdrop(
     private sealed interface Update {
         data class Changed(val bitmaps: GlassPanelDiffusion.Backdrops) : Update
         data object Unchanged : Update
+        data object SameTextures : Update
         data class Unavailable(val missingWindow: Boolean = false, val policy: Int? = null) : Update
     }
 
-    private class Source(private val bitmaps: GlassPanelDiffusion.Backdrops, val display: DisplayFrame) {
+    private class Source(private val bitmaps: GlassPanelDiffusion.Backdrops, val display: DisplayFrame, previous: Source?) {
         private val matrix = Matrix().apply {
             val bounds = display.bounds
             setScale(bounds.width().toFloat() / bitmaps.diffuse.width, bounds.height().toFloat() / bitmaps.diffuse.height)
             postTranslate(bounds.left.toFloat(), bounds.top.toFloat())
         }
-        val diffuse = shader(bitmaps.diffuse).apply { setLocalMatrix(matrix) }
-        val bevel = shader(bitmaps.bevel).apply { setLocalMatrix(matrix) }
+        val diffuse: BitmapShader =
+            if (previous?.display === display && previous.bitmaps.diffuse === bitmaps.diffuse) previous.diffuse
+            else shader(bitmaps.diffuse).apply { setLocalMatrix(matrix) }
+        val bevel: BitmapShader =
+            if (previous?.display === display && previous.bitmaps.bevel === bitmaps.bevel) previous.bevel
+            else shader(bitmaps.bevel).apply { setLocalMatrix(matrix) }
         val transformed by lazy(LazyThreadSafetyMode.NONE) { shader(bitmaps.diffuse) to shader(bitmaps.bevel) }
 
         fun shadersInLocalSpace(screenToLocal: Matrix, transform: Matrix): Pair<BitmapShader, BitmapShader> {
@@ -161,7 +166,9 @@ internal class GlassPanelBackdrop(
             }
             try {
                 if (!session.active) return Update.Unavailable()
-                val bitmaps = session.diffusion.apply(bitmap) ?: return Update.Unchanged
+                val bitmaps = session.diffusion.apply(bitmap) ?: return if (session.diffusion.inputChanged) {
+                    Update.SameTextures
+                } else Update.Unchanged
                 Update.Changed(bitmaps)
             } finally {
                 bitmap.recycle()
@@ -175,10 +182,7 @@ internal class GlassPanelBackdrop(
     private fun complete(session: DisplayFrame, update: Update) {
         inFlight = false
         if (frame !== session || !hasVisibleRoot(session)) {
-            if (update is Update.Changed) {
-                update.bitmaps.diffuse.recycle()
-                update.bitmaps.bevel.recycle()
-            }
+            if (update is Update.Changed) update.bitmaps.recycleUnpublished()
             // A new observation may have tried to start while the old capture was draining.
             if (frame === session) clear() else if (frame != null) schedule(OPEN_DELAY)
             return
@@ -189,7 +193,7 @@ internal class GlassPanelBackdrop(
                 session.cadence.reset()
                 session.lastPolicy = null
                 val first = source == null
-                source = Source(update.bitmaps, session)
+                source = Source(update.bitmaps, session, source)
                 if (!reported) {
                     reported = true
                     HookEntry.log("GLASS_PANEL_SOURCE type=$windowType ${update.bitmaps.diffuse.width}x${update.bitmaps.diffuse.height}")
@@ -212,6 +216,8 @@ internal class GlassPanelBackdrop(
                 }
             }
             Update.Unchanged -> session.cadence.recordIdenticalFrame()
+            // The underlying content is moving even when rounding leaves both textures unchanged.
+            Update.SameTextures -> session.cadence.reset()
             is Update.Unavailable -> {
                 session.cadence.reset()
                 if (source != null) {
