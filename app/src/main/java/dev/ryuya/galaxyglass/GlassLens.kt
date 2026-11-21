@@ -46,19 +46,27 @@ internal class GlassLens(density: Float) {
             float2 q = abs(local) - halfSize + corner;
             float2 outward = max(q, 0.0);
             float dist = length(outward) + min(max(q.x, q.y), 0.0) - corner;
-            if (dot(outward, outward) < 0.0001) {
-                outward = q.x > q.y ? float2(1, 0) : float2(0, 1);
-            }
-            float2 normal = normalize(outward) * sign(local);
             float depth = max(0.0, -dist);
             float limit = min(halfSize.x, halfSize.y) * 0.88;
             float innerHeight = min(mix(25.0, $GLASS_DOCK_BEVEL_DP, dock) * pixelsPerDp, limit);
             float outerHeight = min(12.0 * pixelsPerDp, limit);
-            float innerOffset = circularBevel(depth, innerHeight) * mix(15.0, 19.0, dock) * pixelsPerDp * strength;
-            float outerOffset = circularBevel(depth, outerHeight) * 34.0 * pixelsPerDp * strength;
-            float edgeShare = clamp(1.0 - depth / max(outerHeight, 0.5), 0.0, 1.0);
-            float2 facePoint = p + normal * innerOffset;
-            float2 edgePoint = p + normal * outerOffset;
+            float edgeOpacity = 1.0;
+            if (dock > 0.5) {
+                // GlassMaterial supplies the dock face underneath the transparent interior.
+                edgeOpacity = 1.0 - smoothstep(outerHeight * 0.33, innerHeight, depth);
+                if (edgeOpacity == 0.0) return half4(0.0);
+            }
+            float2 facePoint = p;
+            float2 normal = float2(0.0);
+            // The inner bevel is at least as deep as the outer one for both dock and panel.
+            if (depth < max(innerHeight, 0.5)) {
+                if (dot(outward, outward) < 0.0001) {
+                    outward = q.x > q.y ? float2(1, 0) : float2(0, 1);
+                }
+                normal = normalize(outward) * sign(local);
+                float innerOffset = circularBevel(depth, innerHeight) * mix(15.0, 19.0, dock) * pixelsPerDp * strength;
+                facePoint += normal * innerOffset;
+            }
 
             half3 body = backdrop.eval(facePoint).rgb;
             if (panel < 0.5) {
@@ -72,15 +80,16 @@ internal class GlassLens(density: Float) {
                 body += backdrop.eval(facePoint - float2(0, spread)).rgb * neighborWeight;
             }
             half3 light = body;
+            float edgeShare = clamp(1.0 - depth / max(outerHeight, 0.5), 0.0, 1.0);
             if (edgeShare > 0.0) {
+                float outerOffset = circularBevel(depth, outerHeight) * 34.0 * pixelsPerDp * strength;
+                float2 edgePoint = p + normal * outerOffset;
                 float2 fringe = normal * (1.6 * pixelsPerDp * edgeShare * strength);
                 half3 edge = half3(bevelBackdrop.eval(edgePoint + fringe).r,
                     bevelBackdrop.eval(edgePoint).g, bevelBackdrop.eval(edgePoint - fringe).b);
                 light = mix(body, edge, edgeShare * strength);
             }
             if (dock > 0.5) {
-                // The face is drawn by GlassMaterial over the original wallpaper.
-                float edgeOpacity = 1.0 - smoothstep(outerHeight * 0.33, innerHeight, depth);
                 return half4(light * edgeOpacity, edgeOpacity);
             }
             float luminance = dot(light, half3(0.2126, 0.7152, 0.0722));

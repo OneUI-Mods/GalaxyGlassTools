@@ -350,7 +350,9 @@ internal class GlassHost(
         if (panelBackdrop != null) return
         val density = app.resources.displayMetrics.density
         val captureWorker = BackgroundExecutors.serial("OneUiGlassShadeCapture")
-        val backdrop = GlassPanelBackdrop(main, captureWorker, density, ::refreshPanelSurfaces, live = true)
+        val backdrop = GlassPanelBackdrop(
+            main, captureWorker, density, { refreshPanelSurfaces(backdropOnly = true) }, live = true,
+        )
         panelBackdrop = backdrop
         var checkedUnlockThisOpening = false
         notificationShade = runCatching {
@@ -376,9 +378,11 @@ internal class GlassHost(
         (appearance.quick || appearance.notifications || appearance.systemSurfaces)
 
     @RequiresApi(33)
-    private fun refreshPanelSurfaces() {
+    private fun refreshPanelSurfaces(backdropOnly: Boolean = false) {
         if (appearance.quick || appearance.systemSurfaces) quick?.refresh()
-        if (appearance.notifications) cards?.refresh()
+        if (appearance.notifications) {
+            if (backdropOnly) cards?.backdropChanged() else cards?.refresh()
+        }
         if (appearance.systemSurfaces) systemSurfaces?.backdropChanged()
     }
 

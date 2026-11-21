@@ -203,6 +203,13 @@ internal class GlassNotificationCards(
         }
     }
 
+    fun backdropChanged() {
+        // The live texture is drawn by the row, above its separate background display list.
+        for (background in seen.keys) {
+            if (background.isShown) (background.parent as? View)?.postInvalidateOnAnimation()
+        }
+    }
+
     fun refresh() {
         val config = appearance()
         if ((!config.notifications && !config.lockScreen) || config.strength == 0) {
