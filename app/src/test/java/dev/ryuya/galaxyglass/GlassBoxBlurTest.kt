@@ -13,6 +13,7 @@ class GlassBoxBlurTest {
         for ((width, height, radius) in listOf(
             Triple(1, 1, 1), Triple(1, 23, 4), Triple(32, 1, 3),
             Triple(3, 2, 5), Triple(41, 27, 3), Triple(240, 520, 13),
+            Triple(17, 11, 0), Triple(67, 9, 31), Triple(9, 67, 32),
         )) {
             val image = IntArray(width * height) { random.nextInt() }
             val actual = image.copyOf()
@@ -54,21 +55,23 @@ class GlassBoxBlurTest {
             }
             val dirty = checkNotNull(GlassBoxBlur.changedBounds(input, changed, width, height))
             assertEquals(region, dirty)
-            val crop = dirty.expanded(2 * totalRadius, width, height)
             val full = changed.copyOf()
             val old = input.copyOf()
-            val patch = IntArray(crop.width * crop.height)
-            GlassBoxBlur.copyRegion(changed, patch, width, crop)
+            val patch = changed.copyOf()
+            val scratch = IntArray(patch.size)
+            var stored = GlassBoxBlur.Bounds(0, 0, width, height)
             var radius = 0
             for (pass in listOf(bevelRadius, diffuseRadius, diffuseRadius)) {
                 radius += pass
                 GlassBoxBlur.apply(full, IntArray(full.size), full, width, height, pass)
                 GlassBoxBlur.apply(old, IntArray(old.size), old, width, height, pass)
-                GlassBoxBlur.apply(patch, IntArray(patch.size), patch, crop.width, crop.height, pass)
+                val required = dirty.expanded(2 * totalRadius - radius, width, height)
+                GlassBoxBlur.applyRegion(patch, scratch, patch, stored.width, stored.height, pass, required.relativeTo(stored))
+                stored = required
                 val output = dirty.expanded(radius, width, height)
                 val merged = old.copyOf()
                 for (row in output.top until output.bottom) {
-                    val offset = (row - crop.top) * crop.width + output.left - crop.left
+                    val offset = (row - stored.top) * stored.width + output.left - stored.left
                     patch.copyInto(merged, row * width + output.left, offset, offset + output.width)
                 }
                 assertArrayEquals(full, merged)

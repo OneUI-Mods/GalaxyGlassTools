@@ -54,14 +54,14 @@ internal class GlassPanelDiffusion(private val skipUnchanged: Boolean) {
         }
 
         val last = previousBackdrops
-        // An affected output pixel needs another full filter radius of unchanged input.
-        val inputBounds = if (changed != null && changed.width * changed.height <= pixels.size / 2) {
+        // Include the unchanged input neighbors when estimating whether a patch is cheaper.
+        val workBounds = if (changed != null && changed.width * changed.height <= pixels.size / 2) {
             changed.expanded(2 * totalRadius, width, height)
         } else null
-        val next = if (changed != null && inputBounds != null && last != null &&
-            inputBounds.width * inputBounds.height <= pixels.size / 2
+        val next = if (changed != null && workBounds != null && last != null &&
+            workBounds.width * workBounds.height <= pixels.size / 2
         ) {
-            patch(input, inputBounds, changed, last, totalRadius)
+            patch(input, changed, last, totalRadius)
         } else {
             GlassBoxBlur.apply(input, scratch, pixels, width, height, bevelRadius)
             val bevel = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
@@ -74,19 +74,22 @@ internal class GlassPanelDiffusion(private val skipUnchanged: Boolean) {
 
     private fun patch(
         input: IntArray,
-        inputBounds: GlassBoxBlur.Bounds,
         changed: GlassBoxBlur.Bounds,
         last: Backdrops,
         totalRadius: Int,
     ): Backdrops {
-        GlassBoxBlur.copyRegion(input, pixels, width, inputBounds)
-        GlassBoxBlur.apply(pixels, scratch, pixels, inputBounds.width, inputBounds.height, bevelRadius)
-        val bevel = patchTexture(last.bevel, inputBounds, changed.expanded(bevelRadius, width, height))
+        // Each pass writes only the affected output plus the neighbors needed by later passes.
+        val diffuseBounds = changed.expanded(totalRadius, width, height)
+        val firstDiffuseInput = changed.expanded(totalRadius + 2 * diffuseRadius, width, height)
+        val secondDiffuseInput = changed.expanded(totalRadius + diffuseRadius, width, height)
+        GlassBoxBlur.applyRegion(input, scratch, pixels, width, height, bevelRadius, firstDiffuseInput)
+        val bevel = patchTexture(last.bevel, firstDiffuseInput, changed.expanded(bevelRadius, width, height))
         try {
-            repeat(2) {
-                GlassBoxBlur.apply(pixels, scratch, pixels, inputBounds.width, inputBounds.height, diffuseRadius)
-            }
-            return Backdrops(patchTexture(last.diffuse, inputBounds, changed.expanded(totalRadius, width, height)), bevel)
+            GlassBoxBlur.applyRegion(pixels, scratch, pixels, firstDiffuseInput.width, firstDiffuseInput.height,
+                diffuseRadius, secondDiffuseInput.relativeTo(firstDiffuseInput))
+            GlassBoxBlur.applyRegion(pixels, scratch, pixels, secondDiffuseInput.width, secondDiffuseInput.height,
+                diffuseRadius, diffuseBounds.relativeTo(secondDiffuseInput))
+            return Backdrops(patchTexture(last.diffuse, diffuseBounds, diffuseBounds), bevel)
         } catch (error: Exception) {
             bevel.recycle()
             throw error

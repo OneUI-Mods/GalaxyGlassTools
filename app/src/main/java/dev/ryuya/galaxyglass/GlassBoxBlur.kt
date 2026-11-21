@@ -15,6 +15,9 @@ internal object GlassBoxBlur {
             (right + radius).coerceAtMost(width),
             (bottom + radius).coerceAtMost(height),
         )
+
+        fun relativeTo(input: Bounds) =
+            Bounds(left - input.left, top - input.top, right - input.left, bottom - input.top)
     }
 
     fun changedBounds(old: IntArray, new: IntArray, width: Int, height: Int): Bounds? {
@@ -51,61 +54,73 @@ internal object GlassBoxBlur {
         return Bounds(left, firstRow, right, lastRow + 1)
     }
 
-    fun copyRegion(source: IntArray, destination: IntArray, stride: Int, bounds: Bounds) {
-        if (bounds.width == stride) {
-            source.copyInto(destination, 0, bounds.top * stride, bounds.bottom * stride)
-            return
-        }
-        for (row in 0 until bounds.height) {
-            val start = (bounds.top + row) * stride + bounds.left
-            source.copyInto(destination, row * bounds.width, start, start + bounds.width)
-        }
+    fun apply(source: IntArray, scratch: IntArray, destination: IntArray, width: Int, height: Int, radius: Int) {
+        // Transpose the first result so both passes read contiguous scanlines. The second pass
+        // transposes back, preserving the rounding between the horizontal and vertical passes.
+        blurLines(source, scratch, width, 0, height, 0, width, radius)
+        blurLines(scratch, destination, height, 0, width, 0, height, radius)
     }
 
-    fun apply(source: IntArray, scratch: IntArray, destination: IntArray, width: Int, height: Int, radius: Int) {
-        blurLines(source, scratch, height, width, width, 1, radius)
-        blurLines(scratch, destination, width, height, 1, width, radius)
+    /** Writes only [bounds] to a tightly packed output, with the same samples as a full pass. */
+    fun applyRegion(source: IntArray, scratch: IntArray, destination: IntArray,
+        width: Int, height: Int, radius: Int, bounds: Bounds,
+    ) {
+        val firstRow = (bounds.top - radius).coerceAtLeast(0)
+        val lastRow = (bounds.bottom + radius).coerceAtMost(height)
+        val rows = lastRow - firstRow
+        blurLines(source, scratch, width, firstRow, rows, bounds.left, bounds.right, radius)
+        blurLines(scratch, destination, rows, 0, bounds.width, bounds.top - firstRow, bounds.bottom - firstRow, radius)
     }
 
     private fun blurLines(
         source: IntArray,
         destination: IntArray,
-        lineCount: Int,
         lineLength: Int,
-        lineStride: Int,
-        pixelStride: Int,
+        firstLine: Int,
+        lineCount: Int,
+        start: Int,
+        end: Int,
         radius: Int,
     ) {
         val windowSize = 2 * radius + 1
-        val initialEntering = min(radius + 1, lineLength - 1) * pixelStride
-        val lastOffset = (lineLength - 1) * pixelStride
+        // Rounding the reciprocal up preserves floor(sum / size) for every possible 8-bit
+        // channel sum when 255 * size * size < 2^20. Larger windows use integer division.
+        val reciprocal = if (windowSize in 1..63) ((1 shl 20) + windowSize - 1) / windowSize else 0
+        val lastOffset = lineLength - 1
+        val initialLeaving = (start - radius).coerceAtLeast(0)
+        val initialEntering = min(start + radius + 1, lastOffset)
         for (line in 0 until lineCount) {
-            val first = line * lineStride
+            val first = (line + firstLine) * lineLength
             var red = 0
             var green = 0
             var blue = 0
             for (offset in -radius..radius) {
-                val pixel = source[first + offset.coerceIn(0, lineLength - 1) * pixelStride]
+                val pixel = source[first + (start + offset).coerceIn(0, lastOffset)]
                 red += (pixel ushr 16) and 255
                 green += (pixel ushr 8) and 255
                 blue += pixel and 255
             }
             val last = first + lastOffset
-            var leavingIndex = first
+            var leavingIndex = first + initialLeaving
             var enteringIndex = first + initialEntering
-            var destinationIndex = first
-            for (offset in 0 until lineLength) {
-                destination[destinationIndex] = 0xff000000.toInt() or
+            var destinationIndex = line
+            for (offset in start until end) {
+                val rgb = if (reciprocal != 0) {
+                    (((red * reciprocal) ushr 20) shl 16) or
+                        (((green * reciprocal) ushr 20) shl 8) or ((blue * reciprocal) ushr 20)
+                } else {
                     ((red / windowSize) shl 16) or ((green / windowSize) shl 8) or (blue / windowSize)
+                }
+                destination[destinationIndex] = 0xff000000.toInt() or rgb
                 val leaving = source[leavingIndex]
                 val entering = source[enteringIndex]
                 red += ((entering ushr 16) and 255) - ((leaving ushr 16) and 255)
                 green += ((entering ushr 8) and 255) - ((leaving ushr 8) and 255)
                 blue += (entering and 255) - (leaving and 255)
                 // Keep the same clamped endpoints while advancing the addresses in place.
-                if (offset >= radius) leavingIndex += pixelStride
-                if (enteringIndex < last) enteringIndex += pixelStride
-                destinationIndex += pixelStride
+                if (offset >= radius) leavingIndex++
+                if (enteringIndex < last) enteringIndex++
+                destinationIndex += lineCount
             }
         }
     }
