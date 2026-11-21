@@ -14,6 +14,7 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.VectorDrawable
 import android.view.View
+import android.widget.ImageButton
 import android.widget.ImageView
 import androidx.annotation.RequiresApi
 import kotlin.math.abs
@@ -26,6 +27,7 @@ import kotlin.math.roundToInt
 internal class GlassSystemSurfaceEffect(
     private val material: GlassMaterial,
     private val powerActionIcon: Boolean,
+    private val pipButton: Boolean = false,
     private val onDrawn: () -> Unit = {},
 ) {
     private val outline = Outline()
@@ -55,8 +57,11 @@ internal class GlassSystemSurfaceEffect(
             restoreAlpha()
             background = stock
         }
-        val resolved = if (powerActionIcon) resolvePowerActionCircle(view, density)
-            else resolveShape(view, stock, density * fallbackDp)
+        val resolved = when {
+            powerActionIcon -> resolvePowerActionCircle(view, density)
+            pipButton -> resolvePipButtonCircle(view, stock, density)
+            else -> resolveShape(view, stock, density * fallbackDp)
+        }
         if (!resolved) {
             restore(view)
             return false
@@ -66,7 +71,7 @@ internal class GlassSystemSurfaceEffect(
         layer.setBounds(shape)
         layer.radii.indices.forEach { layer.radii[it] = radii[it] }
 
-        if (stock == null && !powerActionIcon && !keepFill) {
+        if (stock == null && !powerActionIcon && !pipButton && !keepFill) {
             if (placement == Placement.OVERLAY) view.overlay.remove(layer)
             layer.fill = true
             if (view.background !== layer) setBackgroundPreservingPadding(view, layer)
@@ -77,7 +82,7 @@ internal class GlassSystemSurfaceEffect(
             placement = Placement.OVERLAY
             // Leave state-list and ripple opacity to the owner. Preserve foreground contrast
             // on windows with busy content underneath by retaining most of the native fill.
-            if (!keepFill && (nativeOutline || boundedPlate) && (stock is GradientDrawable || stock is ColorDrawable ||
+            if (!keepFill && !pipButton && (nativeOutline || boundedPlate) && (stock is GradientDrawable || stock is ColorDrawable ||
                 (stock is InsetDrawable && stock.drawable is GradientDrawable))) {
                 if (stock.alpha != appliedAlpha) originalAlpha = stock.alpha
                 val alpha = (originalAlpha * (1f - 0.42f * strength / 100f)).roundToInt()
@@ -86,6 +91,29 @@ internal class GlassSystemSurfaceEffect(
             } else restoreAlpha()
         }
         layer.invalidateSelf()
+        return true
+    }
+
+    private fun resolvePipButtonCircle(view: View, stock: Drawable?, density: Float): Boolean {
+        val transparent = stock == null || (stock is ColorDrawable && stock.alpha == 0)
+        val samsungIcon = (view as? ImageButton)?.drawable as? VectorDrawable
+        val samsungSize = (24f * density).roundToInt()
+        // Samsung's top controls draw their own 24 dp discs inside larger touch targets.
+        if (transparent && samsungIcon != null && abs(samsungIcon.intrinsicWidth - samsungSize) <= 1 &&
+            abs(samsungIcon.intrinsicHeight - samsungSize) <= 1 && !samsungIcon.bounds.isEmpty &&
+            resolveArtworkBounds(view, samsungIcon)) {
+            radii.fill(minOf(shape.width(), shape.height()) / 2f)
+            return true
+        }
+        val size = minOf(view.width, view.height)
+        // PiP2 already blurs a disc sized to this view. Follow its size when the menu resizes.
+        val diameter = if (view.javaClass.name == "com.android.wm.shell.pip2.phone.PipMenuActionView") size
+            else minOf(36f * density, size - 4f * density).roundToInt()
+        if (diameter <= 0) return false
+        val left = (view.width - diameter) / 2
+        val top = (view.height - diameter) / 2
+        shape.set(left, top, left + diameter, top + diameter)
+        radii.fill(diameter / 2f)
         return true
     }
 
@@ -136,15 +164,19 @@ internal class GlassSystemSurfaceEffect(
         if (abs(artwork.intrinsicWidth - nativeSize) > 1 ||
             abs(artwork.intrinsicHeight - nativeSize) > 1 || artwork.bounds.isEmpty) return false
 
+        if (!resolveArtworkBounds(icon, artwork, 1f / 64f)) return false
+        radii.fill(minOf(shape.width(), shape.height()) / 2f)
+        return true
+    }
+
+    private fun resolveArtworkBounds(icon: ImageView, artwork: Drawable, inset: Float = 0f): Boolean {
         actionCircle.set(artwork.bounds)
-        actionCircle.inset(actionCircle.width() / 64f, actionCircle.height() / 64f)
+        actionCircle.inset(actionCircle.width() * inset, actionCircle.height() * inset)
         if (!icon.imageMatrix.mapRect(actionCircle)) return false
         actionCircle.offset(icon.paddingLeft.toFloat(), icon.paddingTop.toFloat())
         shape.set(ceil(actionCircle.left).toInt(), ceil(actionCircle.top).toInt(),
             floor(actionCircle.right).toInt(), floor(actionCircle.bottom).toInt())
-        if (shape.isEmpty || !shape.containsIn(view)) return false
-        radii.fill(minOf(shape.width(), shape.height()) / 2f)
-        return true
+        return !shape.isEmpty && shape.containsIn(icon)
     }
 
     private fun Rect.containsIn(view: View): Boolean =

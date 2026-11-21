@@ -10,6 +10,7 @@ internal object GlassSystemCatalog {
         val keepFill: Boolean = false,
         val powerActionIcon: Boolean = false,
         val shadeBackdrop: Boolean = false,
+        val pipButton: Boolean = false,
     )
     enum class NotificationControls { PLATE, CONTENT }
     data class Surface(
@@ -27,6 +28,7 @@ internal object GlassSystemCatalog {
         val keepFill: Boolean = false,
         val powerActionIcon: Boolean = false,
         val shadeBackdrop: Boolean = false,
+        val pipButton: Boolean = false,
     )
     private data class Layout(
         val name: String,
@@ -211,8 +213,11 @@ internal object GlassSystemCatalog {
         root("bubble_bar_manage_education", 22),
         root("bubble_bar_stack_education", 22),
         Layout("bubble_bar_expanded_view", listOf(Anchor("bubble_bar_caption_view", 24, keepFill = true))),
-        Layout("pip_menu", listOf(Anchor("actions_container", 18), Anchor("top_end_container", 20))),
-        Layout("sem_pip_menu", listOf(Anchor("actions_container", 20), Anchor("top_end_container", 20))),
+        Layout("pip_menu", listOf("settings", "dismiss", "expand_button").map { Anchor(it, pipButton = true) }),
+        Layout("sem_pip_menu", listOf("settings", "enter_split", "expand", "dismiss", "expand_button")
+            .map { Anchor(it, pipButton = true) }),
+        Layout("pip_menu_action", listOf(Anchor(null, pipButton = true))),
+        Layout("pip2_menu_action", listOf(Anchor(null, pipButton = true))),
         root("screen_pinning_request", 24),
         plate("desktop_mode_window_decor_handle_menu", "app_info_pill", "windowing_pill", "more_actions_pill",
             "open_in_app_or_browser_pill"),
@@ -273,12 +278,14 @@ internal object GlassSystemCatalog {
             val layoutId = resources.getIdentifier(layout.name, "layout", SYSTEM_UI)
             if (layoutId == 0) continue
             val targets = layout.anchors.mapNotNull { anchor ->
-                if (anchor.name == null) Target(ROOT, anchor.cornerDp, anchor.keepFill, shadeBackdrop = anchor.shadeBackdrop)
+                if (anchor.name == null) Target(ROOT, anchor.cornerDp, anchor.keepFill,
+                    shadeBackdrop = anchor.shadeBackdrop, pipButton = anchor.pipButton)
                 else {
                     val pack = if (anchor.name.startsWith("android:")) ANDROID else SYSTEM_UI
                     val id = resources.getIdentifier(anchor.name.substringAfter(':'), "id", pack)
                     id.takeIf { it != 0 }?.let {
-                        Target(it, anchor.cornerDp, anchor.keepFill, anchor.powerActionIcon, anchor.shadeBackdrop)
+                        Target(it, anchor.cornerDp, anchor.keepFill, anchor.powerActionIcon, anchor.shadeBackdrop,
+                            anchor.pipButton)
                     }
                 }
             }

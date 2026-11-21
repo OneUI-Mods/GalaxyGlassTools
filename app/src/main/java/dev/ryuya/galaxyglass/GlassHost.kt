@@ -40,7 +40,7 @@ internal class GlassHost(
     private var appearance = GlassAppearance()
     private var nightMode = app.resources.configuration.isNightModeActive
     private var homeActivity = WeakReference(activity)
-    private var unlocked = false
+    @Volatile private var unlocked = false
     private var quick: GlassQuickTiles? = null
     private var cards: GlassNotificationCards? = null
     private var popups: GlassNotificationPopups? = null
@@ -301,7 +301,7 @@ internal class GlassHost(
         systemSurfaces = GlassSystemSurfaces(
             app, main, { if (appearance.systemSurfaces) appearance.strength else 0 },
             { if (appearance.lockScreen) appearance.strength else 0 }, ::lockScreenVisible,
-            { unlocked }, { power?.isInteractive == true }, material,
+            { unlocked }, ::refreshPopupUnlock, { power?.isInteractive == true }, material,
             { panelBackdrop }, !systemSurfacesOnly,
             { quick?.refresh() },
             { markDrawn(GlassAppearance.SYSTEM_SURFACES) },

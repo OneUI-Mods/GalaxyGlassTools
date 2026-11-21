@@ -36,6 +36,7 @@ internal class GlassSystemSurfaces(
     private val lockStrength: () -> Int,
     private val lockScreenVisible: () -> Boolean,
     private val unlocked: () -> Boolean,
+    private val refreshUnlock: () -> Unit,
     private val screenOn: () -> Boolean,
     private val material: GlassMaterial,
     private val panelBackdrop: () -> GlassPanelBackdrop?,
@@ -409,6 +410,8 @@ internal class GlassSystemSurfaces(
         private var notificationStage = GlassSurfaceStage.FOUND
         private var panelObserver: ViewTreeObserver? = null
         private var panelStrength = -1
+        private val hasPipButtons = spec.targets.any { it.pipButton }
+        private var checkedPipUnlock = false
 
         override fun onViewAttachedToWindow(view: View) {
             if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) notificationPlates[view] = Unit
@@ -429,6 +432,7 @@ internal class GlassSystemSurfaces(
             }
             panelObserver = null
             panelStrength = -1
+            checkedPipUnlock = false
             restore()
         }
 
@@ -440,7 +444,13 @@ internal class GlassSystemSurfaces(
         override fun onGlobalLayout() {
             val root = view.get() ?: return
             val current = visibleStrength(root)
-            if (current != panelStrength) refresh()
+            if (current != panelStrength || (hasPipButtons && current > 0 && pipTargetsChanged(root))) refresh()
+        }
+
+        private fun pipTargetsChanged(root: View): Boolean = spec.targets.any { anchor ->
+            val target = if (anchor.id == 0) root else root.findViewById<View>(anchor.id) ?: return@any false
+            val visible = target.isShown && target.width > 0 && target.height > 0
+            visible != effects.containsKey(target)
         }
 
         override fun onLayoutChange(
@@ -479,6 +489,12 @@ internal class GlassSystemSurfaces(
 
         fun refresh() = safely(spec.name) {
             val root = view.get() ?: return@safely
+            if (hasPipButtons && !checkedPipUnlock && !unlocked() && !lockScreenVisible() &&
+                root.width > 0 && root.isShown && screenOn()) {
+                // A SystemUI reload can keep the device unlocked without sending USER_PRESENT again.
+                checkedPipUnlock = true
+                refreshUnlock()
+            }
             val level = visibleStrength(root)
             panelStrength = level
             if (spec.notificationControls != null) {
@@ -494,7 +510,7 @@ internal class GlassSystemSurfaces(
             for (anchor in spec.targets) {
                 val target = if (anchor.id == 0) root else root.findViewById<View>(anchor.id) ?: continue
                 styled = apply(target, level, anchor.cornerDp, kept, anchor.keepFill,
-                    anchor.powerActionIcon, anchor.shadeBackdrop) || styled
+                    anchor.powerActionIcon, anchor.shadeBackdrop, anchor.pipButton) || styled
             }
             if (spec.dialog) {
                 val decor = root.rootView
@@ -523,10 +539,11 @@ internal class GlassSystemSurfaces(
             keepFill: Boolean = false,
             powerActionIcon: Boolean = false,
             shadeBackdrop: Boolean = false,
+            pipButton: Boolean = false,
         ): Boolean {
             if (owners[target]?.let { it !== this } == true) return false
             val effect = effects.getOrPut(target) {
-                GlassSystemSurfaceEffect(material, powerActionIcon) {
+                GlassSystemSurfaceEffect(material, powerActionIcon, pipButton) {
                     if (loggedSurfaces.add(spec.name)) {
                         HookEntry.log("GLASS_SYSTEM_SURFACE_DRAWN ${spec.name}")
                         onSurface(spec.name, GlassSurfaceStage.DRAWN)
