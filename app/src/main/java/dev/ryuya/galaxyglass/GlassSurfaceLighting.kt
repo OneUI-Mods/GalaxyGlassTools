@@ -13,6 +13,10 @@ internal class GlassSurfaceLighting(density: Float) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val shader = RuntimeShader(SOURCE)
     private var reported = false
+    private var sized = false
+    private var widthBits = 0
+    private var heightBits = 0
+    private val cornerUniform = GlassUniform4()
     private var styleStrength = -1
     private var styleDark: Boolean? = null
     private var styleIcon: Boolean? = null
@@ -32,8 +36,13 @@ internal class GlassSurfaceLighting(density: Float) {
         icon: Boolean,
         opacity: Float,
     ) {
-        shader.setFloatUniform("size", width, height)
-        shader.setFloatUniform("corners", corners[0], corners[2], corners[4], corners[6])
+        if (!sized || widthBits != width.toRawBits() || heightBits != height.toRawBits()) {
+            shader.setFloatUniform("size", width, height)
+            widthBits = width.toRawBits()
+            heightBits = height.toRawBits()
+            sized = true
+        }
+        cornerUniform.set(shader, "corners", corners[0], corners[2], corners[4], corners[6])
         if (styleStrength != strength) {
             shader.setFloatUniform("strength", strength / 100f)
             styleStrength = strength

@@ -15,9 +15,11 @@ internal class GlassPanelDiffusion(private val skipUnchanged: Boolean) {
     private var hasPrevious = false
     private var bevelRadius = 1
     private var diffuseRadius = 1
+    private var previousBackdrops: Backdrops? = null
 
     fun forgetPrevious() {
         hasPrevious = false
+        previousBackdrops = null
     }
 
     /** Returns null if the input has exactly the same pixels as the previous frame. */
@@ -34,68 +36,56 @@ internal class GlassPanelDiffusion(private val skipUnchanged: Boolean) {
                 val shortSide = min(width, height)
                 bevelRadius = (shortSide / 44).coerceAtLeast(1)
                 diffuseRadius = (shortSide / 18).coerceAtLeast(1)
-                hasPrevious = false
+                forgetPrevious()
             }
             software.getPixels(pixels, 0, width, 0, 0, width, height)
         } finally {
             if (software !== bitmap) software.recycle()
         }
+        val input = pixels
+        val totalRadius = bevelRadius + 2 * diffuseRadius
+        val band = if (skipUnchanged && hasPrevious) {
+            GlassBoxBlur.changedBand(previous, input, width, height, totalRadius) ?: return null
+        } else null
         if (skipUnchanged) {
-            if (hasPrevious && pixels.contentEquals(previous)) return null
-            pixels.copyInto(previous)
+            pixels = previous
+            previous = input
             hasPrevious = true
         }
 
-        blurLines(pixels, scratch, height, width, width, 1, bevelRadius)
-        blurLines(scratch, pixels, width, height, 1, width, bevelRadius)
-        val bevel = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
-        repeat(2) {
-            blurLines(pixels, scratch, height, width, width, 1, diffuseRadius)
-            blurLines(scratch, pixels, width, height, 1, width, diffuseRadius)
+        val last = previousBackdrops
+        val next = if (band != null && last != null && band.sourceEnd - band.sourceStart <= height / 2) {
+            patch(input, band, last, totalRadius)
+        } else {
+            GlassBoxBlur.apply(input, scratch, pixels, width, height, bevelRadius)
+            val bevel = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+            repeat(2) { GlassBoxBlur.apply(pixels, scratch, pixels, width, height, diffuseRadius) }
+            Backdrops(Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888), bevel)
         }
-        return Backdrops(Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888), bevel)
+        if (skipUnchanged) previousBackdrops = next
+        return next
     }
 
-    private fun blurLines(
-        source: IntArray,
-        destination: IntArray,
-        lineCount: Int,
-        lineLength: Int,
-        lineStride: Int,
-        pixelStride: Int,
-        radius: Int,
-    ) {
-        val windowSize = 2 * radius + 1
-        val initialEntering = min(radius + 1, lineLength - 1) * pixelStride
-        val lastOffset = (lineLength - 1) * pixelStride
-        for (line in 0 until lineCount) {
-            val first = line * lineStride
-            var red = 0
-            var green = 0
-            var blue = 0
-            for (offset in -radius..radius) {
-                val pixel = source[first + offset.coerceIn(0, lineLength - 1) * pixelStride]
-                red += (pixel ushr 16) and 255
-                green += (pixel ushr 8) and 255
-                blue += pixel and 255
-            }
-            val last = first + lastOffset
-            var leavingIndex = first
-            var enteringIndex = first + initialEntering
-            var destinationIndex = first
-            for (offset in 0 until lineLength) {
-                destination[destinationIndex] = 0xff000000.toInt() or
-                    ((red / windowSize) shl 16) or ((green / windowSize) shl 8) or (blue / windowSize)
-                val leaving = source[leavingIndex]
-                val entering = source[enteringIndex]
-                red += ((entering ushr 16) and 255) - ((leaving ushr 16) and 255)
-                green += ((entering ushr 8) and 255) - ((leaving ushr 8) and 255)
-                blue += (entering and 255) - (leaving and 255)
-                // Keep the same clamped endpoints while advancing the addresses in place.
-                if (offset >= radius) leavingIndex += pixelStride
-                if (enteringIndex < last) enteringIndex += pixelStride
-                destinationIndex += pixelStride
-            }
+    private fun patch(input: IntArray, band: GlassBoxBlur.Band, last: Backdrops, totalRadius: Int): Backdrops {
+        val lines = band.sourceEnd - band.sourceStart
+        input.copyInto(pixels, 0, band.sourceStart * width, band.sourceEnd * width)
+        GlassBoxBlur.apply(pixels, scratch, pixels, width, lines, bevelRadius)
+        val bevel = patchTexture(last.bevel, band, bevelRadius)
+        try {
+            repeat(2) { GlassBoxBlur.apply(pixels, scratch, pixels, width, lines, diffuseRadius) }
+            return Backdrops(patchTexture(last.diffuse, band, totalRadius), bevel)
+        } catch (error: Exception) {
+            bevel.recycle()
+            throw error
         }
+    }
+
+    private fun patchTexture(old: Bitmap, band: GlassBoxBlur.Band, radius: Int): Bitmap {
+        // Published bitmaps can still be referenced by a recorded display list.
+        val copy = checkNotNull(old.copy(Bitmap.Config.ARGB_8888, true)) { "Backdrop copy failed" }
+        val start = band.affectedStart(radius)
+        val end = band.affectedEnd(radius, height)
+        copy.setPixels(pixels, (start - band.sourceStart) * width, width, 0, start, width, end - start)
+        return copy
     }
 }

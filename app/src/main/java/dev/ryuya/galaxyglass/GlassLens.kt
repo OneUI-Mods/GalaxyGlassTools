@@ -95,6 +95,8 @@ internal class GlassLens(density: Float) {
         }
         """.trimIndent(),
     )
+    private val region = GlassUniform4()
+    private val corners = GlassUniform4()
     private var styleStrength = -1
     private var styleTintBits: Int? = null
     private var styleDark: Boolean? = null
@@ -127,14 +129,14 @@ internal class GlassLens(density: Float) {
         val corner = radius.coerceIn(0f, min(right - left, bottom - top) / 2)
         shader.setInputShader("backdrop", backdrop)
         shader.setInputShader("bevelBackdrop", bevelBackdrop)
-        shader.setFloatUniform("region", left, top, right, bottom)
+        region.set(shader, "region", left, top, right, bottom)
         if (radii != null && radii.size >= 8) {
             val limit = min(right - left, bottom - top) / 2f
-            shader.setFloatUniform("corners", min(radii[0], radii[1]).coerceIn(0f, limit),
+            corners.set(shader, "corners", min(radii[0], radii[1]).coerceIn(0f, limit),
                 min(radii[2], radii[3]).coerceIn(0f, limit), min(radii[4], radii[5]).coerceIn(0f, limit),
                 min(radii[6], radii[7]).coerceIn(0f, limit))
         } else {
-            shader.setFloatUniform("corners", corner, corner, corner, corner)
+            corners.set(shader, "corners", corner, corner, corner, corner)
         }
         if (styleStrength != strength) {
             shader.setFloatUniform("strength", strength / 100f)

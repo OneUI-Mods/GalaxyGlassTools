@@ -35,6 +35,8 @@ internal class GlassDockRenderer : AutoCloseable {
             position(0)
         }
     private val transform = FloatArray(16)
+    private val appliedTransform = FloatArray(16)
+    private var hasAppliedTransform = false
     private var display = EGL_NO_DISPLAY
     private var context = EGL_NO_CONTEXT
     private var target = EGL_NO_SURFACE
@@ -72,6 +74,7 @@ internal class GlassDockRenderer : AutoCloseable {
         eglSwapInterval(display, 0)
 
         program = linkProgram()
+        hasAppliedTransform = false
         position = glGetAttribLocation(program, "position")
         textureTransform = glGetUniformLocation(program, "textureTransform")
         dockBounds = glGetUniformLocation(program, "dockBounds")
@@ -115,7 +118,11 @@ internal class GlassDockRenderer : AutoCloseable {
         Trace.beginSection(if (newFrame) "GlassDockStream.frame" else "GlassDockStream.style")
         try {
             glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture)
-            glUniformMatrix4fv(textureTransform, 1, false, transform, 0)
+            if (!hasAppliedTransform || !appliedTransform.contentEquals(transform)) {
+                glUniformMatrix4fv(textureTransform, 1, false, transform, 0)
+                transform.copyInto(appliedTransform)
+                hasAppliedTransform = true
+            }
             if (appliedShape !== shape) {
                 glViewport(0, 0, shape.width, shape.height)
                 glUniform4f(dockBounds, shape.leftInSource, shape.topInSource, shape.width.toFloat(), shape.height.toFloat())
