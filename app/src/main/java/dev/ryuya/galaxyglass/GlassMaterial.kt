@@ -48,7 +48,7 @@ internal data class GlassAppearance(
 internal class GlassMaterial(private val density: Float) {
     enum class Profile {
         STANDARD, QUICK_CONTROL, QUICK_GROUP, QUICK_SLIDER, NOTIFICATION, VOLUME, SYSTEM_SURFACE, POWER_ACTION,
-        APP_CHROME,
+        APP_CHROME, PRIVACY_PANEL,
     }
 
     var tint: Int = GlassAppearance.DEFAULT_TINT
@@ -218,6 +218,15 @@ internal class GlassMaterial(private val density: Float) {
                 val tintColor = if (dark) 0x222934 else 0xf4f8fc
                 bodyColors = intArrayOf(color(white, 31), fillTint(tintColor, 49), fillTint(tintColor, 67))
                 edgeColors = intArrayOf(color(white, 212), color(white, 96), color(shade, 108), color(white, 128))
+            }
+            Profile.PRIVACY_PANEL -> {
+                bodyColors = if (dark) {
+                    intArrayOf(fillTint(0x4d5158, 48), fillTint(0x41454c, 44), fillTint(0x383c43, 42))
+                } else {
+                    intArrayOf(fillTint(white, 80), fillTint(0xe6edf4, 53), fillTint(0xdbe4ed, 48))
+                }
+                edgeColors = intArrayOf(color(white, 111), color(white, 58),
+                    color(shade, if (dark) 30 else 48), color(white, 56))
             }
             Profile.SYSTEM_SURFACE, Profile.POWER_ACTION -> {
                 bodyColors = if (dark) {

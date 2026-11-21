@@ -36,6 +36,7 @@ internal class GlassQuickTiles(
         SIM_POPUP(GlassMaterial.Profile.SYSTEM_SURFACE),
         HEADER_ACTION(GlassMaterial.Profile.QUICK_CONTROL),
         DETAIL_PANEL(GlassMaterial.Profile.SYSTEM_SURFACE),
+        PRIVACY_PANEL(GlassMaterial.Profile.PRIVACY_PANEL),
         HEADER_TOOLTIP(GlassMaterial.Profile.SYSTEM_SURFACE),
         SECURITY_FOOTER(GlassMaterial.Profile.QUICK_CONTROL),
         MEDIA(GlassMaterial.Profile.QUICK_GROUP),
@@ -45,7 +46,6 @@ internal class GlassQuickTiles(
         PANEL_SUBMENU(GlassMaterial.Profile.SYSTEM_SURFACE),
         BRIGHTNESS_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
         SOUNDCRAFT_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
-        PRIVACY_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
         DND_ACTIONS(GlassMaterial.Profile.QUICK_CONTROL),
         VOLUME_OPTIONS(GlassMaterial.Profile.SYSTEM_SURFACE),
         VOLUME_POPUP(GlassMaterial.Profile.SYSTEM_SURFACE),
@@ -136,6 +136,10 @@ internal class GlassQuickTiles(
                 val shape = geometry ?: return null
                 val canvas = nativeCanvas.get(getCanvas.invoke(getContext.invoke(nativeScope))) as Canvas
                 if (!canvas.isHardwareAccelerated) return null
+                // Privacy settings use the stock backdrop, one tinted plate, and no moving highlights.
+                if (surface == Surface.PRIVACY_PANEL) {
+                    return Frame(canvas, shape, null, Float.NaN, Float.NaN)
+                }
                 val node = drawNode?.get(nativeScope)
                 val touch = pointer()
                 val position = node?.let { runCatching { locate?.invoke(it) }.getOrNull() }
@@ -227,7 +231,7 @@ internal class GlassQuickTiles(
         val row: Int = 1,
     )
 
-    private class RenderPass(val renderer: Renderer) {
+    private class RenderPass(val renderer: Renderer, val surface: Surface) {
         var clipModifier: Any? = null
         var nativeShape: Any? = null
         var boxShape: Any? = null
@@ -277,6 +281,7 @@ internal class GlassQuickTiles(
                         val reduction = when (surface) {
                             Surface.CARD, Surface.SIM_BAR, Surface.EMPTY_MEDIA, Surface.CONTROL_BAR -> .70f
                             Surface.EDITOR, Surface.PANEL_SETTINGS, Surface.PANEL_SUBMENU -> .45f
+                            Surface.PRIVACY_PANEL -> .24f
                             else -> .55f
                         }
                         val alpha = ((stock ushr 56) * (1f - reduction * level / 100f)).toLong()
@@ -296,7 +301,7 @@ internal class GlassQuickTiles(
                 when (pass.renderer.mode) {
                     PlateMode.CLIP -> {
                         pass.bound = true
-                        then.invoke(result, overlay(pass.renderer.surface, requireNotNull(nativeShape)))
+                        then.invoke(result, overlay(pass.surface, requireNotNull(nativeShape)))
                     }
                     PlateMode.CLIPPED_FILL, PlateMode.SUBMENU -> {
                         pass.clipModifier = result
@@ -325,7 +330,7 @@ internal class GlassQuickTiles(
                 if (stock and 0xffffffffL != 0L || stock ushr 56 < 6L) return@aroundMethod chain.proceed()
                 if (pass.renderer.mode == PlateMode.SUBMENU && pass.nativeShape != null && shapeArg === rectangle) {
                     val args = chain.args.toTypedArray()
-                    args[0] = then.invoke(args[0], mask(pass.renderer.surface))
+                    args[0] = then.invoke(args[0], mask(pass.surface))
                     return@aroundMethod chain.proceed(args)
                 }
                 val nativeShape = when (pass.renderer.mode) {
@@ -338,8 +343,8 @@ internal class GlassQuickTiles(
                 } ?: return@aroundMethod chain.proceed()
                 pass.bound = true
                 val args = chain.args.toTypedArray()
-                args[0] = then.invoke(args[0], mask(pass.renderer.surface))
-                then.invoke(chain.proceed(args), overlay(pass.renderer.surface, nativeShape))
+                args[0] = then.invoke(args[0], mask(pass.surface))
+                then.invoke(chain.proceed(args), overlay(pass.surface, nativeShape))
             }
             handles += ModernHook.aroundMethod(animatedVisibility) { chain ->
                 val pass = active.get() ?: return@aroundMethod chain.proceed()
@@ -349,7 +354,7 @@ internal class GlassQuickTiles(
                 }
                 pass.bound = true
                 val args = chain.args.toTypedArray()
-                args[1] = then.invoke(args[1], overlay(pass.renderer.surface, nativeShape))
+                args[1] = then.invoke(args[1], overlay(pass.surface, nativeShape))
                 args[7] = (args[7] as Int) and 0b1110000.inv()
                 args[8] = (args[8] as Int) and 0b10.inv()
                 chain.proceed(args)
@@ -361,7 +366,7 @@ internal class GlassQuickTiles(
                     return@aroundMethod result
                 }
                 pass.bound = true
-                then.invoke(result, overlay(pass.renderer.surface, rowShape))
+                then.invoke(result, overlay(pass.surface, rowShape))
             }
 
             val qs = "com.android.systemui.samsung.quicksetting.ui."
@@ -389,7 +394,6 @@ internal class GlassQuickTiles(
                 Renderer(Surface.PANEL_SUBMENU, settings + "SubMenuContainerKt", "SubMenuContainer", PlateMode.SUBMENU),
                 Renderer(Surface.BRIGHTNESS_ACTIONS, details + "SecBrightnessDetailSceneKt", "BrightBarDetailCommandButtons", PlateMode.ROW),
                 Renderer(Surface.SOUNDCRAFT_ACTIONS, details + "soundcraft.SoundCraftMainKt", "DetailCommandButtons", PlateMode.ROW, row = 2),
-                Renderer(Surface.PRIVACY_ACTIONS, details + "screenprivacy.ScreenPrivacyDetailContentKt", "OptionItem", PlateMode.ROW, row = 2),
                 Renderer(Surface.DND_ACTIONS, details + "DndDetailPageKt\$\$ExternalSyntheticLambda4", "invoke", PlateMode.ROW, 3),
                 Renderer(Surface.EDITOR, panel + "ContextMenuKt", "ContextMenu-", PlateMode.FILL, 9),
                 Renderer(Surface.VOLUME_OPTIONS,
@@ -411,10 +415,16 @@ internal class GlassQuickTiles(
                     (it.name == renderer.method || (renderer.method.endsWith("-") && it.name.startsWith(renderer.method))) &&
                         (renderer.parameters == null || it.parameterCount == renderer.parameters)
                 }
+                val isPrivacyPanel = if (renderer.surface == Surface.DETAIL_PANEL) {
+                    privacyPanelMatcher(method)
+                } else null
                 ModernHook.deoptimize(method)
                 handles += ModernHook.aroundMethod(method) { chain ->
                     val previous = active.get()
-                    active.set(RenderPass(renderer))
+                    val surface = if (isPrivacyPanel?.invoke(chain.args.getOrNull(2)) == true) {
+                        Surface.PRIVACY_PANEL
+                    } else renderer.surface
+                    active.set(RenderPass(renderer, surface))
                     try {
                         chain.proceed()
                     } finally {
@@ -422,6 +432,7 @@ internal class GlassQuickTiles(
                     }
                 }
                 report(renderer.surface, GlassSurfaceStage.FOUND)
+                if (isPrivacyPanel != null) report(Surface.PRIVACY_PANEL, GlassSurfaceStage.FOUND)
                 HookEntry.log("GLASS_QUICK_PLATE_READY ${renderer.surface.name.lowercase()} ${method.name}")
             }.onFailure {
                 HookEntry.log("GLASS_QUICK_PLATE_UNAVAILABLE ${renderer.owner} ${it.javaClass.simpleName}")
@@ -431,6 +442,25 @@ internal class GlassQuickTiles(
             throw error
         }
     }
+
+    private fun privacyPanelMatcher(detailBackground: Method): ((Any?) -> Boolean)? =
+        runCatching {
+            // DetailBG receives the same tile model on first composition and during transitions.
+            val transitionTile = detailBackground.parameterTypes[2].getField("tile")
+            val tileSpec = transitionTile.type.getField("spec")
+            check(tileSpec.type == String::class.java)
+            val matches: (Any?) -> Boolean = { transition ->
+                try {
+                    val tile = transition?.let(transitionTile::get)
+                    tile != null && tileSpec.get(tile) == "ScreenPrivacy"
+                } catch (_: ReflectiveOperationException) {
+                    false
+                }
+            }
+            matches
+        }.onFailure {
+            HookEntry.log("GLASS_QUICK_PRIVACY_PANEL_UNAVAILABLE ${it.javaClass.simpleName}")
+        }.getOrNull()
 
     private fun installHeaderActions(loader: ClassLoader, resources: Resources, modifier: Class<*>, then: Method,
         overlay: (Surface, Any) -> Any) {
