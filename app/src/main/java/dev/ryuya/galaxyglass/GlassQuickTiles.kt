@@ -128,8 +128,13 @@ internal class GlassQuickTiles(
                 val width = Float.fromBits((packed ushr 32).toInt())
                 val height = Float.fromBits(packed.toInt())
                 if (!width.isFinite() || !height.isFinite() || width < 14 * density || height < 14 * density) return null
-                val size = Size(packed, requireNotNull(getLayoutDirection.invoke(nativeScope)), getDensity.invoke(nativeScope) as Float)
-                if (size != lastSize) {
+                val direction = requireNotNull(getLayoutDirection.invoke(nativeScope))
+                val currentDensity = getDensity.invoke(nativeScope) as Float
+                val previousSize = lastSize
+                if (previousSize == null || previousSize.packed != packed ||
+                    previousSize.layoutDirection !== direction || previousSize.density != currentDensity
+                ) {
+                    val size = Size(packed, direction, currentDensity)
                     geometry = outline.read(nativeShape, size.packed, size.layoutDirection, nativeScope)
                     lastSize = size
                 }
@@ -140,8 +145,11 @@ internal class GlassQuickTiles(
                 if (surface == Surface.PRIVACY_PANEL) {
                     return Frame(canvas, shape, null, Float.NaN, Float.NaN)
                 }
-                val node = drawNode?.get(nativeScope)
                 val touch = pointer()
+                if (touch == null && backdrop()?.isDrawReady() != true) {
+                    return Frame(canvas, shape, null, Float.NaN, Float.NaN)
+                }
+                val node = drawNode?.get(nativeScope)
                 val position = node?.let { runCatching { locate?.invoke(it) }.getOrNull() }
                 val screenX = position?.let { Float.fromBits((it ushr 32).toInt()) } ?: Float.NaN
                 val screenY = position?.let { Float.fromBits(it.toInt()) } ?: Float.NaN
@@ -554,6 +562,7 @@ internal class GlassQuickTiles(
             if (!rim && frame.screenX.isFinite() && frame.screenY.isFinite() && backdrop()?.draw(
                     frame.canvas, frame.screenX, frame.screenY, outline.left, outline.top, outline.right, outline.bottom,
                     outline.radii, strength, dark, material.tintFactor, opacity = strength * 0.01f,
+                    outline = outline.path,
                 ) == true) {
                 if (refractedSurfaces.add(surface)) {
                     HookEntry.log("GLASS_QUICK_REFRACTION ${surface.name.lowercase()}")

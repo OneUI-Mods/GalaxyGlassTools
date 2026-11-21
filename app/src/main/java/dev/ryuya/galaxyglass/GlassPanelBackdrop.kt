@@ -48,11 +48,23 @@ internal class GlassPanelBackdrop(
         data class Unavailable(val missingWindow: Boolean = false, val policy: Int? = null) : Update
     }
 
-    private class Source(bitmaps: GlassPanelDiffusion.Backdrops, val display: DisplayFrame) {
-        val width = bitmaps.diffuse.width
-        val height = bitmaps.diffuse.height
-        val diffuse = shader(bitmaps.diffuse)
-        val bevel = shader(bitmaps.bevel)
+    private class Source(private val bitmaps: GlassPanelDiffusion.Backdrops, val display: DisplayFrame) {
+        private val matrix = Matrix().apply {
+            val bounds = display.bounds
+            setScale(bounds.width().toFloat() / bitmaps.diffuse.width, bounds.height().toFloat() / bitmaps.diffuse.height)
+            postTranslate(bounds.left.toFloat(), bounds.top.toFloat())
+        }
+        val diffuse = shader(bitmaps.diffuse).apply { setLocalMatrix(matrix) }
+        val bevel = shader(bitmaps.bevel).apply { setLocalMatrix(matrix) }
+        val transformed by lazy(LazyThreadSafetyMode.NONE) { shader(bitmaps.diffuse) to shader(bitmaps.bevel) }
+
+        fun shadersInLocalSpace(screenToLocal: Matrix, transform: Matrix): Pair<BitmapShader, BitmapShader> {
+            transform.setConcat(screenToLocal, matrix)
+            return transformed.also { (face, edge) ->
+                face.setLocalMatrix(transform)
+                edge.setLocalMatrix(transform)
+            }
+        }
 
         private fun shader(bitmap: Bitmap) = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
             setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
@@ -235,33 +247,28 @@ internal class GlassPanelBackdrop(
         canvas: Canvas, screenX: Float, screenY: Float, left: Float, top: Float, right: Float, bottom: Float,
         radii: FloatArray, strength: Int, dark: Boolean, tint: Float, opacity: Float,
         screenToLocal: Matrix? = null,
+        outline: Path? = null,
     ): Boolean {
         val source = source ?: return false
         if (lensUnavailable || mix <= 0f || opacity <= 0f || right <= left || bottom <= top) return false
         return try {
             val glass = lens ?: GlassLens(density).also { lens = it }
-            val bounds = source.display.bounds
-            transform.setScale(bounds.width().toFloat() / source.width, bounds.height().toFloat() / source.height)
-            if (screenToLocal == null) {
-                transform.postTranslate(bounds.left - screenX, bounds.top - screenY)
-            } else {
-                transform.postTranslate(bounds.left.toFloat(), bounds.top.toFloat())
-                transform.postConcat(screenToLocal)
+            val transformed = screenToLocal?.let { source.shadersInLocalSpace(it, transform) }
+            val shape = outline ?: path.apply {
+                rect.set(left, top, right, bottom)
+                rewind()
+                addRoundRect(rect, radii, Path.Direction.CW)
             }
-            source.diffuse.setLocalMatrix(transform)
-            source.bevel.setLocalMatrix(transform)
-            rect.set(left, top, right, bottom)
-            path.rewind()
-            path.addRoundRect(rect, radii, Path.Direction.CW)
-            glass.draw(canvas, source.diffuse, left, top, right, bottom, min(radii[0], radii[1]),
-                strength, dark, opacity = opacity * mix, tintFactor = tint, panel = true, outline = path,
-                bevelBackdrop = source.bevel, radii = radii)
+            glass.draw(canvas, transformed?.first ?: source.diffuse, left, top, right, bottom, min(radii[0], radii[1]),
+                strength, dark, opacity = opacity * mix, tintFactor = tint, panel = true, outline = shape,
+                bevelBackdrop = transformed?.second ?: source.bevel, radii = radii,
+                immutableInputs = transformed == null,
+                sampleX = if (transformed == null) screenX else 0f,
+                sampleY = if (transformed == null) screenY else 0f)
             true
         } catch (error: RuntimeException) {
             lensUnavailable = true
             lens = null
-            source.diffuse.setLocalMatrix(null)
-            source.bevel.setLocalMatrix(null)
             clear()
             HookEntry.log("GLASS_PANEL_LENS_UNAVAILABLE ${error.javaClass.simpleName}")
             false

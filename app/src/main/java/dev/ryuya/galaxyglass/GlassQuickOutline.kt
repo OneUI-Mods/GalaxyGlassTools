@@ -1,5 +1,6 @@
 package dev.ryuya.galaxyglass
 
+import android.graphics.Path
 import dev.ryuya.galaxyglass.compat.DexSymbols
 
 /** Resolves the same corner geometry as Samsung's clip, including RTL and animated sizes. */
@@ -17,7 +18,11 @@ internal class GlassQuickOutline(private val loader: ClassLoader) {
     }
     private val bounds = listOf("left", "top", "right", "bottom").map(roundRect.type::getField)
 
-    data class Geometry(val left: Float, val top: Float, val right: Float, val bottom: Float, val radii: FloatArray)
+    data class Geometry(val left: Float, val top: Float, val right: Float, val bottom: Float, val radii: FloatArray) {
+        val path by lazy(LazyThreadSafetyMode.NONE) {
+            Path().apply { addRoundRect(left, top, right, bottom, radii, Path.Direction.CW) }
+        }
+    }
 
     fun read(nativeShape: Any, size: Long, layoutDirection: Any, drawScope: Any): Geometry? {
         val outline = createOutline.invoke(nativeShape, size, layoutDirection, drawScope)

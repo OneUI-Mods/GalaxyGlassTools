@@ -27,6 +27,7 @@ internal class GlassLens(density: Float) {
         uniform shader bevelBackdrop;
         uniform float4 region;
         uniform float4 corners;
+        uniform float2 sampleOrigin;
         uniform float strength;
         uniform float pixelsPerDp;
         uniform float dark;
@@ -56,7 +57,7 @@ internal class GlassLens(density: Float) {
                 edgeOpacity = 1.0 - smoothstep(outerHeight * 0.33, innerHeight, depth);
                 if (edgeOpacity == 0.0) return half4(0.0);
             }
-            float2 facePoint = p;
+            float2 facePoint = p + sampleOrigin;
             float2 normal = float2(0.0);
             // The inner bevel is at least as deep as the outer one for both dock and panel.
             if (depth < max(innerHeight, 0.5)) {
@@ -83,7 +84,7 @@ internal class GlassLens(density: Float) {
             float edgeShare = clamp(1.0 - depth / max(outerHeight, 0.5), 0.0, 1.0);
             if (edgeShare > 0.0) {
                 float outerOffset = circularBevel(depth, outerHeight) * 34.0 * pixelsPerDp * strength;
-                float2 edgePoint = p + normal * outerOffset;
+                float2 edgePoint = p + sampleOrigin + normal * outerOffset;
                 float2 fringe = normal * (1.6 * pixelsPerDp * edgeShare * strength);
                 half3 edge = half3(bevelBackdrop.eval(edgePoint + fringe).r,
                     bevelBackdrop.eval(edgePoint).g, bevelBackdrop.eval(edgePoint - fringe).b);
@@ -111,9 +112,14 @@ internal class GlassLens(density: Float) {
     private var styleDark: Boolean? = null
     private var stylePanel: Boolean? = null
     private var styleDock: Boolean? = null
+    private var sourceX = 0f
+    private var sourceY = 0f
+    private var boundBackdrop: Shader? = null
+    private var boundBevel: Shader? = null
 
     init {
         shader.setFloatUniform("pixelsPerDp", density)
+        shader.setFloatUniform("sampleOrigin", 0f, 0f)
     }
 
     fun draw(
@@ -133,11 +139,21 @@ internal class GlassLens(density: Float) {
         bevelBackdrop: Shader = backdrop,
         radii: FloatArray? = null,
         dock: Boolean = false,
+        immutableInputs: Boolean = false,
+        sampleX: Float = 0f,
+        sampleY: Float = 0f,
     ) {
         if (!canvas.isHardwareAccelerated || strength <= 0 || right <= left || bottom <= top) return
         val corner = radius.coerceIn(0f, min(right - left, bottom - top) / 2)
-        shader.setInputShader("backdrop", backdrop)
-        shader.setInputShader("bevelBackdrop", bevelBackdrop)
+        if (!immutableInputs || boundBackdrop !== backdrop) shader.setInputShader("backdrop", backdrop)
+        if (!immutableInputs || boundBevel !== bevelBackdrop) shader.setInputShader("bevelBackdrop", bevelBackdrop)
+        boundBackdrop = if (immutableInputs) backdrop else null
+        boundBevel = if (immutableInputs) bevelBackdrop else null
+        if (sourceX != sampleX || sourceY != sampleY) {
+            shader.setFloatUniform("sampleOrigin", sampleX, sampleY)
+            sourceX = sampleX
+            sourceY = sampleY
+        }
         region.set(shader, "region", left, top, right, bottom)
         if (radii != null && radii.size >= 8) {
             val limit = min(right - left, bottom - top) / 2f
@@ -179,6 +195,8 @@ internal class GlassLens(density: Float) {
     }
 
     fun clearBackdrop() {
+        boundBackdrop = null
+        boundBevel = null
         shader.setInputShader("backdrop", EmptyBackdrop)
         shader.setInputShader("bevelBackdrop", EmptyBackdrop)
     }
