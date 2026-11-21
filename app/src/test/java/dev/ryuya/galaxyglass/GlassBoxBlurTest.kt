@@ -2,6 +2,8 @@ package dev.ryuya.galaxyglass
 
 import kotlin.random.Random
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class GlassBoxBlurTest {
@@ -25,31 +27,50 @@ class GlassBoxBlurTest {
     }
 
     @Test
-    fun partialUpdatesMatchFullFramesIncludingTopAndBottomEdges() {
-        val width = 36
+    fun partialUpdatesMatchFullFramesAtAllEdgesAndAcrossMultipleRows() {
+        val width = 84
         val height = 220
         val bevelRadius = 2
         val diffuseRadius = 4
         val totalRadius = bevelRadius + 2 * diffuseRadius
         val random = Random(506)
         val input = IntArray(width * height) { random.nextInt() }
-        for (rows in listOf(0..2, 96..99, 218..219, 108..108)) {
+        assertNull(GlassBoxBlur.changedBounds(input, input.copyOf(), width, height))
+        val regions = listOf(
+            GlassBoxBlur.Bounds(0, 0, 4, 3),
+            GlassBoxBlur.Bounds(80, 0, 84, 3),
+            GlassBoxBlur.Bounds(0, 218, 4, 220),
+            GlassBoxBlur.Bounds(80, 218, 84, 220),
+            GlassBoxBlur.Bounds(40, 96, 42, 99),
+            GlassBoxBlur.Bounds(0, 98, 84, 101),
+            GlassBoxBlur.Bounds(31, 0, 32, 220),
+        )
+        for (region in regions) {
             val changed = input.copyOf()
-            for (y in rows) changed[y * width + 17] = changed[y * width + 17].inv()
-            val band = checkNotNull(GlassBoxBlur.changedBand(input, changed, width, height, totalRadius))
+            for (y in region.top until region.bottom) {
+                // Reverse the x ordering across rows to exercise both bounding directions.
+                val x = if (y % 2 == 0) region.left else region.right - 1
+                changed[y * width + x] = changed[y * width + x].inv()
+            }
+            val dirty = checkNotNull(GlassBoxBlur.changedBounds(input, changed, width, height))
+            assertEquals(region, dirty)
+            val crop = dirty.expanded(2 * totalRadius, width, height)
             val full = changed.copyOf()
             val old = input.copyOf()
-            val patch = changed.copyOfRange(band.sourceStart * width, band.sourceEnd * width)
+            val patch = IntArray(crop.width * crop.height)
+            GlassBoxBlur.copyRegion(changed, patch, width, crop)
             var radius = 0
             for (pass in listOf(bevelRadius, diffuseRadius, diffuseRadius)) {
                 radius += pass
                 GlassBoxBlur.apply(full, IntArray(full.size), full, width, height, pass)
                 GlassBoxBlur.apply(old, IntArray(old.size), old, width, height, pass)
-                GlassBoxBlur.apply(patch, IntArray(patch.size), patch, width, band.sourceEnd - band.sourceStart, pass)
-                val start = band.affectedStart(radius)
-                val end = band.affectedEnd(radius, height)
+                GlassBoxBlur.apply(patch, IntArray(patch.size), patch, crop.width, crop.height, pass)
+                val output = dirty.expanded(radius, width, height)
                 val merged = old.copyOf()
-                patch.copyInto(merged, start * width, (start - band.sourceStart) * width, (end - band.sourceStart) * width)
+                for (row in output.top until output.bottom) {
+                    val offset = (row - crop.top) * crop.width + output.left - crop.left
+                    patch.copyInto(merged, row * width + output.left, offset, offset + output.width)
+                }
                 assertArrayEquals(full, merged)
             }
         }

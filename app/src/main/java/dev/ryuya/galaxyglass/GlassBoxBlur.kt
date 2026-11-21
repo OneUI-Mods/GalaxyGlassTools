@@ -3,16 +3,24 @@ package dev.ryuya.galaxyglass
 import java.util.Arrays
 import kotlin.math.min
 
-/** Separable clamped box blur. A vertical band retains its real neighbors for every pass. */
+/** Separable clamped box blur. A cropped region retains its real neighbors for every pass. */
 internal object GlassBoxBlur {
-    data class Band(val sourceStart: Int, val sourceEnd: Int, val firstChanged: Int, val afterChanged: Int) {
-        fun affectedStart(radius: Int): Int = (firstChanged - radius).coerceAtLeast(0)
-        fun affectedEnd(radius: Int, height: Int): Int = (afterChanged + radius).coerceAtMost(height)
+    data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+        val width get() = right - left
+        val height get() = bottom - top
+
+        fun expanded(radius: Int, width: Int, height: Int) = Bounds(
+            (left - radius).coerceAtLeast(0),
+            (top - radius).coerceAtLeast(0),
+            (right + radius).coerceAtMost(width),
+            (bottom + radius).coerceAtMost(height),
+        )
     }
 
-    fun changedBand(old: IntArray, new: IntArray, width: Int, height: Int, radius: Int): Band? {
+    fun changedBounds(old: IntArray, new: IntArray, width: Int, height: Int): Bounds? {
         val first = Arrays.mismatch(old, new)
         if (first < 0) return null
+        if (first == 0 && old.last() != new.last()) return Bounds(0, 0, width, height)
         val firstRow = first / width
         var lastRow = height - 1
         while (lastRow > firstRow) {
@@ -20,13 +28,38 @@ internal object GlassBoxBlur {
             if (!Arrays.equals(old, offset, offset + width, new, offset, offset + width)) break
             lastRow--
         }
-        // The affected output needs a second radius of unchanged input on each side.
-        return Band(
-            (firstRow - 2 * radius).coerceAtLeast(0),
-            (lastRow + 1 + 2 * radius).coerceAtMost(height),
-            firstRow,
-            lastRow + 1,
-        )
+        var left = first % width
+        var right = left + 1
+        for (row in firstRow..lastRow) {
+            val offset = row * width
+            if (row > firstRow && left > 0) {
+                val firstDiff = Arrays.mismatch(old, offset, offset + left, new, offset, offset + left)
+                if (firstDiff >= 0) left = firstDiff
+            }
+            if (right < width) {
+                val last = offset + width - 1
+                if (old[last] != new[last]) {
+                    right = width
+                } else if (!Arrays.equals(old, offset + right, last, new, offset + right, last)) {
+                    var x = width - 2
+                    while (old[offset + x] == new[offset + x]) x--
+                    right = x + 1
+                }
+            }
+            if (left == 0 && right == width) break
+        }
+        return Bounds(left, firstRow, right, lastRow + 1)
+    }
+
+    fun copyRegion(source: IntArray, destination: IntArray, stride: Int, bounds: Bounds) {
+        if (bounds.width == stride) {
+            source.copyInto(destination, 0, bounds.top * stride, bounds.bottom * stride)
+            return
+        }
+        for (row in 0 until bounds.height) {
+            val start = (bounds.top + row) * stride + bounds.left
+            source.copyInto(destination, row * bounds.width, start, start + bounds.width)
+        }
     }
 
     fun apply(source: IntArray, scratch: IntArray, destination: IntArray, width: Int, height: Int, radius: Int) {
