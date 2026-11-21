@@ -70,4 +70,11 @@ class ApplicationGlassTargetsTest {
         }
         assertFalse(tab in ApplicationGlassTargets.layoutPlates("com.android.settings"))
     }
+
+    @Test
+    fun chromeCustomTabsKeepTheirTypedBackgroundThroughAnOverlay() {
+        val toolbar = "org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar"
+        assertTrue(ApplicationGlassTargets.usesOverlay("com.android.chrome", toolbar))
+        assertFalse(ApplicationGlassTargets.usesOverlay("example.browser", toolbar))
+    }
 }

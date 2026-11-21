@@ -122,6 +122,7 @@ internal object ApplicationGlassTargets {
         packageName == "com.android.chrome" && className in CHROME_CANVAS_TOOLBARS
 
     private val CHROME_CANVAS_TOOLBARS = setOf(
+        "org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar",
         "org.chromium.chrome.browser.toolbar.top.ToolbarPhone",
         "org.chromium.chrome.browser.toolbar.top.ToolbarTablet",
         "org.chromium.chrome.browser.hub.HubToolbarView",

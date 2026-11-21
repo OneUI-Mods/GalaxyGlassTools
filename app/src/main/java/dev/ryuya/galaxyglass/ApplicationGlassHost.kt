@@ -66,6 +66,7 @@ internal class ApplicationGlassHost(
     private val samsungViewBlur by lazy { runCatching { SamsungViewBlur() }.getOrNull() }
     private val activityWindows = WeakHashMap<Activity, WeakReference<View>>()
     private val rolesByType = mutableMapOf<Class<*>, Int?>()
+    private val acceptsWrappedBackground = mutableMapOf<Class<*>, Boolean>()
     private val plateNames = ApplicationGlassTargets.plates(app.packageName) + ApplicationGlassTargets.sheetPlates
     private val inputMethodPlateNames = ApplicationGlassTargets.inputMethodPlates(app.packageName)
     private val namedPlates = resolvePlates(plateNames)
@@ -594,12 +595,18 @@ internal class ApplicationGlassHost(
             val old = plates[view]
             val decorPlate = uninstallPrompt && view === root.get()
             if (old != null && (decorPlate || old.overlay || old === view.background)) return
-            if (!ensureGuard()) return
-            material.tint = config.tint
             val canvasToolbar = ApplicationGlassTargets.usesOverlay(app.packageName, view.javaClass.name)
             val hostedCard = generateSequence(view.javaClass as Class<*>?) { it.superclass }
                 .any { it.name == "androidx.cardview.widget.CardView" }
-            val layer = Plate(view, view.background, corner, hostedCard || canvasToolbar, canvasToolbar)
+            val overlay = hostedCard || canvasToolbar
+            // A covariant getter may cast the stored background to its concrete drawable type.
+            if (!overlay && !acceptsWrappedBackground.getOrPut(view.javaClass) {
+                    runCatching { view.javaClass.getMethod("getBackground").returnType == Drawable::class.java }
+                        .getOrDefault(false)
+                }) return
+            if (!ensureGuard()) return
+            material.tint = config.tint
+            val layer = Plate(view, view.background, corner, overlay, canvasToolbar)
             plates[view] = layer
             if (layer.overlay) {
                 layer.setBounds(0, 0, view.width, view.height)
