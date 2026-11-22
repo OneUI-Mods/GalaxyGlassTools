@@ -165,7 +165,15 @@ internal class GlassDockStream(
 
     fun align() {
         val active = session ?: return
-        if (owner.get()?.hasWindowFocus() == true) active.alignOutput()
+        val host = owner.get() ?: return
+        var view: View? = host
+        var visible = host.windowVisibility == View.VISIBLE
+        while (visible && view != null) {
+            visible = view.visibility == View.VISIBLE && view.alpha > 0f
+            view = view.parent as? View
+        }
+        active.setSourceVisible(visible)
+        if (visible && host.hasWindowFocus()) active.alignOutput()
     }
 
     fun close(afterTransition: Boolean = false) {
@@ -249,6 +257,8 @@ internal class GlassDockStream(
         private var thread: HandlerThread? = null
         private var graphics: Handler? = null
         private var virtualDisplay: VirtualDisplay? = null
+        private var sourceSurface: Surface? = null
+        @Volatile private var sourceVisible = true
         private var presentation: Presentation? = null
         private var mirror: SurfaceControl? = null
         @Volatile private var mirrorGeneration = 0L
@@ -306,6 +316,31 @@ internal class GlassDockStream(
             requestStyle()
         }
 
+        fun setSourceVisible(visible: Boolean) {
+            if (visible == sourceVisible) return
+            sourceVisible = visible
+            if (!ready) {
+                main.removeCallbacks(startTimeout)
+                if (visible) main.postDelayed(startTimeout, SOURCE_TIMEOUT_MS)
+            }
+            val display = virtualDisplay ?: return
+            val surface = sourceSurface ?: return
+            graphics?.post {
+                if (!closed && sourceVisible == visible) {
+                    Trace.beginSection(if (visible) "GlassDockStream resume source" else "GlassDockStream suspend source")
+                    try {
+                        // Keep the dock's output and final image attached. The compositor
+                        // need not render the wallpaper mirror while the dock is invisible.
+                        display.surface = if (visible) surface else null
+                    } catch (error: RuntimeException) {
+                        HookEntry.log("GLASS_DOCK_SOURCE_VISIBILITY ${error.javaClass.simpleName}")
+                    } finally {
+                        Trace.endSection()
+                    }
+                }
+            }
+        }
+
         private fun requestStyle() {
             graphics?.let { if (!it.hasCallbacks(applyStyle)) it.post(applyStyle) }
         }
@@ -343,18 +378,20 @@ internal class GlassDockStream(
 
         private fun showSource(surface: Surface, width: Int, height: Int) {
             val context = container.context
+            sourceSurface = surface
+            val sourceOutput = surface.takeIf { sourceVisible }
             val displays = checkNotNull(context.getSystemService(DisplayManager::class.java))
             val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
             val dpi = context.resources.displayMetrics.densityDpi
             val display = if (Build.VERSION.SDK_INT >= 34) {
                 val config = VirtualDisplayConfig.Builder("One UI dock wallpaper", width, height, dpi)
                     .setFlags(flags)
-                    .setSurface(surface)
+                    .setSurface(sourceOutput)
                     .setRequestedRefreshRate(source.refreshRate)
                     .build()
                 displays.createVirtualDisplay(config)
             } else {
-                displays.createVirtualDisplay("One UI dock wallpaper", width, height, dpi, surface, flags)
+                displays.createVirtualDisplay("One UI dock wallpaper", width, height, dpi, sourceOutput, flags)
             }
             virtualDisplay = checkNotNull(display) { "Wallpaper display not available" }
             val window = Presentation(context, display.display)
@@ -396,7 +433,7 @@ internal class GlassDockStream(
             }
             window.show()
             window.window?.insetsController?.hide(WindowInsets.Type.systemBars())
-            main.postDelayed(startTimeout, 2_500L)
+            if (sourceVisible) main.postDelayed(startTimeout, SOURCE_TIMEOUT_MS)
         }
 
         private fun requestMirror(target: SurfaceView, width: Int, height: Int) {
@@ -514,6 +551,7 @@ internal class GlassDockStream(
             val oldDisplay = virtualDisplay
             presentation = null
             virtualDisplay = null
+            sourceSurface = null
             graphics?.post { renderer.close() }
             (container.parent as? RelativeLayout)?.removeView(container)
             thread?.quitSafely()
@@ -527,5 +565,6 @@ internal class GlassDockStream(
 
     private companion object {
         const val WINDOW_RELEASE_DELAY_MS = 350L
+        const val SOURCE_TIMEOUT_MS = 2_500L
     }
 }

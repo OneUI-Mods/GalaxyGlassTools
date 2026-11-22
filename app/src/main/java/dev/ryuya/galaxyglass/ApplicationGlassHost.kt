@@ -30,6 +30,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.os.PowerManager
+import android.os.Trace
 import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
@@ -659,14 +660,29 @@ internal class ApplicationGlassHost(
         private fun scanBatch(root: View) {
             val dedicated = panel.get()
             var remaining = VIEWS_PER_BATCH
-            while (remaining-- > 0 && pending.isNotEmpty()) {
-                val view = pending.removeFirst()
-                if (!view.isShown || view.rootView !== root || view is SurfaceView || view is TextureView) continue
-                val radius = corner(view, ime) ?: if (view === dedicated) 24 else null
-                if (radius != null && view.width > 0 && view.height > 0) bind(view, radius)
-                if (view is ViewGroup) {
-                    for (index in view.childCount - 1 downTo 0) pending.addFirst(view.getChildAt(index))
+            // Newly queued children are visited on this same UI-thread pass. A
+            // branch left over from an earlier frame can have moved or gone hidden.
+            var childrenQueuedThisBatch = 0
+            val tracing = Trace.isEnabled()
+            if (tracing) Trace.beginSection("GalaxyGlassTools scan app controls")
+            try {
+                while (remaining-- > 0 && pending.isNotEmpty()) {
+                    val view = pending.removeFirst()
+                    val fromValidatedBranch = childrenQueuedThisBatch > 0
+                    if (fromValidatedBranch) childrenQueuedThisBatch--
+                    if (view.visibility != View.VISIBLE || view is SurfaceView || view is TextureView) continue
+                    if (!fromValidatedBranch && !belongsToVisibleRoot(view, root)) continue
+                    val radius = corner(view, ime) ?: if (view === dedicated) 24 else null
+                    if (radius != null && view.width > 0 && view.height > 0 &&
+                        belongsToVisibleRoot(view, root)) bind(view, radius)
+                    if (view is ViewGroup) {
+                        val count = view.childCount
+                        for (index in count - 1 downTo 0) pending.addFirst(view.getChildAt(index))
+                        childrenQueuedThisBatch += count
+                    }
                 }
+            } finally {
+                if (tracing) Trace.endSection()
             }
             if (pending.isNotEmpty()) {
                 scanPosted = true
@@ -680,6 +696,8 @@ internal class ApplicationGlassHost(
                 }
             }
         }
+
+        private fun belongsToVisibleRoot(view: View, root: View) = view.isShown && view.rootView === root
 
         private fun bind(view: View, corner: Int) {
             val old = plates[view]
