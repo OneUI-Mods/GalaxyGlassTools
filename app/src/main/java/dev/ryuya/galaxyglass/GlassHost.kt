@@ -256,7 +256,7 @@ internal class GlassHost(
             }
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivityStopped(activity: Activity) {
-                if (homeActivity.get() === activity) dock?.clearDockBackdrops()
+                if (homeActivity.get() === activity) dock?.clearDockBackdrops(afterTransition = true)
             }
             override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
             override fun onActivityDestroyed(activity: Activity) {

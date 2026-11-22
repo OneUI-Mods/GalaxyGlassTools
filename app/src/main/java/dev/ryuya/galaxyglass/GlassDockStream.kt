@@ -17,6 +17,7 @@ import android.hardware.display.VirtualDisplayConfig
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Trace
 import android.view.Display
 import android.view.Surface
 import android.view.SurfaceControl
@@ -32,6 +33,8 @@ import android.widget.RelativeLayout
 import androidx.annotation.RequiresApi
 import dev.ryuya.galaxyglass.compat.DexSymbols
 import java.lang.ref.WeakReference
+import java.util.concurrent.Executor
+import java.util.concurrent.RejectedExecutionException
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -40,10 +43,12 @@ import kotlin.math.roundToInt
 internal class GlassDockStream(
     host: RelativeLayout,
     private val main: Handler,
+    private val worker: Executor,
     private val material: GlassMaterial,
     private val changed: () -> Unit,
 ) {
     private data class SourceArea(val crop: Rect, val screen: Rect, val refreshRate: Float)
+    private data class Update(val bounds: Rect, val radius: Float, val strength: Int, val dark: Boolean)
 
     private val owner = WeakReference(host)
     private val density = host.resources.displayMetrics.density
@@ -52,19 +57,65 @@ internal class GlassDockStream(
     private val transform = Matrix()
     private val physicalBounds = RectF()
     private val keyguard = host.context.getSystemService(KeyguardManager::class.java)
+    // Resource delivery must run even after GlassHost cancels its own callbacks on hot reload.
+    private val resourceDelivery = Handler(main.looper)
     private var session: Session? = null
     private var failed = false
+    private var pending: Update? = null
+    private var checkingKeyguard = false
+    private var accessGeneration = 0L
+    private val windowReleases = mutableListOf<Runnable>()
 
     val supported: Boolean get() = !failed
     val ownsPlate: Boolean get() = session != null
 
     fun update(bounds: Rect, radius: Float, strength: Int, dark: Boolean) {
-        val host = owner.get()
-        if (failed || host == null || !host.isAttachedToWindow || !host.isShown ||
-            host.windowVisibility != View.VISIBLE || keyguard?.isKeyguardLocked != false) {
-            close()
+        val host = visibleHost()
+        if (host == null) {
+            close(afterTransition = true)
             return
         }
+        if (session == null && (bounds.isEmpty || !host.hasWindowFocus())) return
+        pending = Update(Rect(bounds), radius, strength, dark)
+        checkKeyguard()
+    }
+
+    private fun visibleHost(): RelativeLayout? = owner.get()?.takeIf {
+        !failed && it.isAttachedToWindow && it.isShown && it.windowVisibility == View.VISIBLE
+    }
+
+    private fun checkKeyguard() {
+        if (checkingKeyguard || pending == null) return
+        checkingKeyguard = true
+        val generation = accessGeneration
+        try {
+            worker.execute {
+                Trace.beginSection("GlassDockStream.keyguard")
+                val unlocked = try {
+                    runCatching { keyguard?.isKeyguardLocked == false }.getOrDefault(false)
+                } finally {
+                    Trace.endSection()
+                }
+                main.post {
+                    checkingKeyguard = false
+                    if (generation == accessGeneration) {
+                        val update = pending
+                        pending = null
+                        if (!unlocked) close()
+                        else if (update != null) updateUnlocked(update)
+                    }
+                    checkKeyguard()
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            checkingKeyguard = false
+            close()
+        }
+    }
+
+    private fun updateUnlocked(update: Update) {
+        val host = visibleHost() ?: return
+        val (bounds, radius, strength, dark) = update
         // Recents and the shade can claim focus while the user can still see the dock.
         if (bounds.isEmpty || !host.hasWindowFocus()) return
         val display = host.display ?: return
@@ -91,7 +142,7 @@ internal class GlassDockStream(
             inset(-movementMargin, -movementMargin)
             intersect(0, 0, screen.width(), screen.height())
         }
-        close()
+        releaseSession(afterTransition = true)
         val next = Session(
             host, SourceArea(sourceCrop, screen, rate), bounds,
             shape(bounds, sourceCrop, radius, strength, dark),
@@ -117,11 +168,45 @@ internal class GlassDockStream(
         if (owner.get()?.hasWindowFocus() == true) active.alignOutput()
     }
 
-    fun close() {
+    fun close(afterTransition: Boolean = false) {
+        accessGeneration++
+        pending = null
+        releaseSession(afterTransition)
+        if (!afterTransition) {
+            for (release in windowReleases.toList()) {
+                main.removeCallbacks(release)
+                release.run()
+            }
+        }
+    }
+
+    private fun releaseSession(afterTransition: Boolean) {
         val active = session ?: return
         session = null
-        active.close()
+        active.close(afterTransition)
         changed()
+    }
+
+    private fun releaseWindow(window: Presentation?, display: VirtualDisplay?, afterTransition: Boolean) {
+        if (window == null && display == null) return
+        val release = object : Runnable {
+            override fun run() {
+                windowReleases.remove(this)
+                Trace.beginSection("GlassDockStream.releaseWindow")
+                try {
+                    runCatching { window?.dismiss() }
+                    runCatching { display?.release() }
+                } finally {
+                    Trace.endSection()
+                }
+            }
+        }
+        if (!afterTransition) {
+            release.run()
+            return
+        }
+        windowReleases += release
+        if (!main.postDelayed(release, WINDOW_RELEASE_DELAY_MS)) release.run()
     }
 
     private fun fail(active: Session, error: Exception) {
@@ -166,6 +251,7 @@ internal class GlassDockStream(
         private var virtualDisplay: VirtualDisplay? = null
         private var presentation: Presentation? = null
         private var mirror: SurfaceControl? = null
+        @Volatile private var mirrorGeneration = 0L
         @Volatile private var attached = false
         @Volatile private var closed = false
         @Volatile private var shape = initialShape
@@ -281,13 +367,14 @@ internal class GlassDockStream(
 
                     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
                         if (!closed) try {
-                            attachMirror(this@apply, width, height)
+                            requestMirror(this@apply, width, height)
                         } catch (error: Exception) {
                             fail(this@Session, error)
                         }
                     }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        mirrorGeneration++
                         attached = false
                         runCatching { detachMirror() }
                     }
@@ -312,14 +399,48 @@ internal class GlassDockStream(
             main.postDelayed(startTimeout, 2_500L)
         }
 
-        private fun attachMirror(target: SurfaceView, width: Int, height: Int) {
+        private fun requestMirror(target: SurfaceView, width: Int, height: Int) {
+            val generation = ++mirrorGeneration
+            worker.execute {
+                if (closed || generation != mirrorGeneration) return@execute
+                Trace.beginSection("GlassDockStream.requestMirror")
+                val result = try {
+                    runCatching {
+                        if (keyguard?.isKeyguardLocked != false) return@runCatching null
+                        val manager = DexSymbols.findClass("android.view.WindowManagerGlobal")
+                            .getMethod("getWindowManagerService").invoke(null)
+                        val method = DexSymbols.findClass("android.view.IWindowManager")
+                            .getMethod("mirrorWallpaperSurface", Int::class.javaPrimitiveType)
+                        checkNotNull(method.invoke(manager, Display.DEFAULT_DISPLAY) as? SurfaceControl) {
+                            "Visible wallpaper not available"
+                        }
+                    }
+                } finally {
+                    Trace.endSection()
+                }
+                val layer = result.getOrNull()
+                if (!resourceDelivery.post {
+                        if (closed || generation != mirrorGeneration || !target.holder.surface.isValid) {
+                            layer?.release()
+                            return@post
+                        }
+                        try {
+                            val available = result.getOrThrow()
+                            if (available == null) this@GlassDockStream.close()
+                            else attachMirror(available, target, width, height)
+                        } catch (error: Exception) {
+                            if (layer != null && mirror !== layer) layer.release()
+                            fail(this@Session, error)
+                        }
+                    }) {
+                    layer?.release()
+                }
+            }
+        }
+
+        private fun attachMirror(layer: SurfaceControl, target: SurfaceView, width: Int, height: Int) {
             detachMirror()
-            val windowManager = DexSymbols.findClass("android.view.WindowManagerGlobal")
-                .getMethod("getWindowManagerService").invoke(null)
-            val mirrorMethod = DexSymbols.findClass("android.view.IWindowManager")
-                .getMethod("mirrorWallpaperSurface", Int::class.javaPrimitiveType)
-            val layer = mirrorMethod.invoke(windowManager, Display.DEFAULT_DISPLAY) as? SurfaceControl
-            check(layer != null && layer.isValid) { "Visible wallpaper not available" }
+            check(layer.isValid) { "Visible wallpaper not available" }
             mirror = layer
             val parent = SurfaceView::class.java.getMethod("getRenderingSurfaceControl").invoke(target) as? SurfaceControl
             check(parent != null && parent.isValid) { "Wallpaper target not available" }
@@ -376,10 +497,12 @@ internal class GlassDockStream(
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
-            if (!closed) main.post { if (session === this) this@GlassDockStream.close() }
+            if (!closed) main.post {
+                if (session === this) this@GlassDockStream.close(afterTransition = true)
+            }
         }
 
-        fun close() {
+        fun close(afterTransition: Boolean) {
             closed = true
             attached = false
             ready = false
@@ -387,15 +510,22 @@ internal class GlassDockStream(
             refractionFade?.cancel()
             refractionFade = null
             runCatching { detachMirror() }
-            runCatching { presentation?.dismiss() }
+            val oldWindow = presentation
+            val oldDisplay = virtualDisplay
             presentation = null
-            runCatching { virtualDisplay?.release() }
             virtualDisplay = null
             graphics?.post { renderer.close() }
             (container.parent as? RelativeLayout)?.removeView(container)
             thread?.quitSafely()
             graphics = null
             thread = null
+            // The mirror and dock output are already detached. Dismissing the source
+            // Presentation can wait on HWUI, so let the launcher finish its transition first.
+            releaseWindow(oldWindow, oldDisplay, afterTransition)
         }
+    }
+
+    private companion object {
+        const val WINDOW_RELEASE_DELAY_MS = 350L
     }
 }

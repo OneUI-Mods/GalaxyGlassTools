@@ -79,7 +79,7 @@ internal class GlassHomeSurfaces(
 
     fun wallpaperChanged() = dock.wallpaperChanged()
 
-    fun clearDockBackdrops() = dock.clearBackdrops()
+    fun clearDockBackdrops(afterTransition: Boolean = false) = dock.clearBackdrops(afterTransition)
 
     private fun safely(action: () -> Unit) {
         try {

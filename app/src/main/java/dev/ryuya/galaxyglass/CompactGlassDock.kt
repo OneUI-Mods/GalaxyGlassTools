@@ -65,7 +65,8 @@ internal class CompactGlassDock(
 
     fun wallpaperChanged() = holders.values.toList().forEach { it.wallpaperChanged() }
 
-    fun clearBackdrops() = holders.values.toList().forEach { it.clearBackdrop() }
+    fun clearBackdrops(afterTransition: Boolean) =
+        holders.values.toList().forEach { it.clearBackdrop(afterTransition) }
 
     private inner class Dock(view: ViewGroup) {
         private val host = WeakReference(view)
@@ -83,7 +84,7 @@ internal class CompactGlassDock(
         }
         private val visibilityListener = ViewTreeObserver.OnWindowVisibilityChangeListener { visibility ->
             if (visibility == View.VISIBLE) refresh()
-            else clearBackdrop()
+            else clearBackdrop(afterTransition = true)
         }
         private val preDrawListener = ViewTreeObserver.OnPreDrawListener {
             plate?.alignBackdrop()
@@ -137,7 +138,7 @@ internal class CompactGlassDock(
 
         fun wallpaperChanged() = plate?.wallpaperMoved(wallpaperChanged = true)
 
-        fun clearBackdrop() = plate?.clearBackdrop()
+        fun clearBackdrop(afterTransition: Boolean) = plate?.clearBackdrop(afterTransition)
 
         fun update(keepDuringLayout: Boolean = true) {
             val view = host.get() ?: return
@@ -260,7 +261,7 @@ internal class CompactGlassDock(
             GlassDockWallpaper(view, main, worker, it, ::backdropChanged)
         }
         private val stream = (view as? RelativeLayout)?.let {
-            GlassDockStream(it, main, material, ::streamChanged)
+            GlassDockStream(it, main, worker, material, ::streamChanged)
         }
         private var strength = -1
         private var corner = 0f
@@ -297,8 +298,8 @@ internal class CompactGlassDock(
             if (stream?.supported != true) wallpaper?.dirty(wallpaperChanged)
         }
 
-        fun clearBackdrop() {
-            stream?.close()
+        fun clearBackdrop(afterTransition: Boolean = false) {
+            stream?.close(afterTransition)
             wallpaper?.clear()
         }
 

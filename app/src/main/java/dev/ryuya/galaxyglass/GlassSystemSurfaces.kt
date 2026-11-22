@@ -63,6 +63,9 @@ internal class GlassSystemSurfaces(
     private var transparency: ContentObserver? = null
     @Volatile private var retired = false
     private val pipSeekInput = if (canUseShadeBackdrop) GlassPipSeekInput(loader) else null
+    private val hiddenPipMenu = if (canUseShadeBackdrop) runCatching { HiddenPipMenuSurface(loader) }
+        .onFailure { HookEntry.log("GLASS_PIP_EMPTY_MENU_UNAVAILABLE ${it.javaClass.simpleName}") }
+        .getOrNull() else null
     private val blurRadiusField = runCatching {
         DexSymbols.findClass("com.android.internal.policy.PhoneWindow")
             .getDeclaredField("mBackgroundBlurRadius").apply { isAccessible = true }
@@ -149,6 +152,7 @@ internal class GlassSystemSurfaces(
         transparency?.let { runCatching { app.contentResolver.unregisterContentObserver(it) } }
         transparency = null
         runCatching { tips?.close() }
+        runCatching { hiddenPipMenu?.close() }
         for ((view, scope) in scopes.toList()) {
             runCatching {
                 view.removeOnAttachStateChangeListener(scope)
