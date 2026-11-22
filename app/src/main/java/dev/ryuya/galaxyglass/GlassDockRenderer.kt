@@ -123,20 +123,36 @@ internal class GlassDockRenderer : AutoCloseable {
                 transform.copyInto(appliedTransform)
                 hasAppliedTransform = true
             }
-            if (appliedShape !== shape) {
-                glViewport(0, 0, shape.width, shape.height)
-                glUniform4f(dockBounds, shape.leftInSource, shape.topInSource, shape.width.toFloat(), shape.height.toFloat())
-                glUniform2f(sourceSize, shape.sourceWidth.toFloat(), shape.sourceHeight.toFloat())
-                glUniform2f(screenScale, shape.screenScaleX, shape.screenScaleY)
-                glUniform4f(material, shape.corner, shape.density, shape.strength, shape.edgeMix)
-                appliedShape = shape
-            }
+            if (appliedShape !== shape) applyShape(shape)
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
             check(eglSwapBuffers(display, target)) { "EGL swap" }
             return true
         } finally {
             Trace.endSection()
         }
+    }
+
+    private fun applyShape(shape: Shape) {
+        val previous = appliedShape
+        val viewportChanged = previous == null || previous.width != shape.width || previous.height != shape.height
+        if (viewportChanged) glViewport(0, 0, shape.width, shape.height)
+        if (viewportChanged || previous == null || previous.leftInSource != shape.leftInSource ||
+            previous.topInSource != shape.topInSource
+        ) {
+            glUniform4f(dockBounds, shape.leftInSource, shape.topInSource, shape.width.toFloat(), shape.height.toFloat())
+        }
+        if (previous == null || previous.sourceWidth != shape.sourceWidth || previous.sourceHeight != shape.sourceHeight) {
+            glUniform2f(sourceSize, shape.sourceWidth.toFloat(), shape.sourceHeight.toFloat())
+        }
+        if (previous == null || previous.screenScaleX != shape.screenScaleX || previous.screenScaleY != shape.screenScaleY) {
+            glUniform2f(screenScale, shape.screenScaleX, shape.screenScaleY)
+        }
+        if (previous == null || previous.corner != shape.corner || previous.density != shape.density ||
+            previous.strength != shape.strength || previous.edgeMix != shape.edgeMix
+        ) {
+            glUniform4f(material, shape.corner, shape.density, shape.strength, shape.edgeMix)
+        }
+        appliedShape = shape
     }
 
     override fun close() {

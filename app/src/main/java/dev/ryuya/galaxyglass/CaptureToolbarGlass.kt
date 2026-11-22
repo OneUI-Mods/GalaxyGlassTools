@@ -33,6 +33,9 @@ import kotlin.math.min
 internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private val main = Handler(Looper.getMainLooper())
     private val plates = WeakHashMap<View, Plate>()
+    private val bindings = WeakHashMap<View, PlateBinding>()
+    private var observer: ContentObserver? = null
+    private var closed = false
     private val screenshotPlates = WeakHashMap<View, Plate>()
     private val guideParts = WeakHashMap<View, GuideBinding>()
     private val reported = mutableSetOf<String>()
@@ -62,7 +65,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private data class Target(val id: Int?, val cornerDp: Int?, val ancestors: Int, val within: Int?)
     private data class Targets(val name: String, val anchors: List<Target>)
 
-    private fun install(loader: ClassLoader?) {
+    fun install(loader: ClassLoader?) {
         if (targets.isEmpty()) return
         val screenshotDraw = runCatching { installScreenshotDraw(loader) }.onFailure {
             Hooks.log("Capture screenshot plate will use its layout: ${it.javaClass.simpleName}")
@@ -87,6 +90,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
                     (before until parent.childCount).map(parent::getChildAt)
                 } else listOf(inflated)
                 fun bindRoots() {
+                    if (closed) return
                     for (root in roots) {
                         if (spec.name in GUIDES) {
                             bindGuide(root, spec.name)
@@ -106,14 +110,17 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             }
         })
         runtime.onOptionsChanged { main.post { refresh() } }
+        val settings = object : ContentObserver(main) {
+            override fun onChange(selfChange: Boolean) {
+                if (closed) return
+                reduceTransparency = readTransparencySetting()
+                refresh()
+            }
+        }
         runtime.context.contentResolver.registerContentObserver(
-            Settings.System.getUriFor(REDUCE_TRANSPARENCY), false, object : ContentObserver(main) {
-                override fun onChange(selfChange: Boolean) {
-                    reduceTransparency = readTransparencySetting()
-                    refresh()
-                }
-            },
+            Settings.System.getUriFor(REDUCE_TRANSPARENCY), false, settings,
         )
+        observer = settings
         Hooks.log("CAPTURE_TOOLBAR_GLASS_READY layouts=${targets.size}")
     }
 
@@ -135,6 +142,7 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     }
 
     private fun refresh() {
+        if (closed) return
         plates.entries.toList().forEach { (view, effect) ->
             update(view, effect)
             effect.invalidateSelf()
@@ -159,12 +167,28 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     private inner class GuideBinding(panel: View, private val layout: String) : View.OnAttachStateChangeListener {
         private val panel = WeakReference(panel)
         private var part: GuidePart? = null
+        private var preDraw: OneShotPreDrawListener? = null
 
         override fun onViewAttachedToWindow(view: View) {
-            OneShotPreDrawListener.add(view) { refresh(view) }
+            preDraw?.removeListener()
+            preDraw = OneShotPreDrawListener.add(view) {
+                preDraw = null
+                refresh(view)
+            }
         }
 
-        override fun onViewDetachedFromWindow(view: View) = restore(view)
+        override fun onViewDetachedFromWindow(view: View) {
+            preDraw?.removeListener()
+            preDraw = null
+            restore(view)
+        }
+
+        fun export(view: View): Array<Any?> = arrayOf(WeakReference(view), layout, null, panel)
+
+        fun close(view: View) {
+            view.removeOnAttachStateChangeListener(this)
+            onViewDetachedFromWindow(view)
+        }
 
         fun refresh(view: View) {
             val region = panel.get()
@@ -216,25 +240,85 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
     }
 
     private fun enabled(): Boolean {
-        return runtime.enabled && !reduceTransparency
+        return !closed && runtime.enabled && !reduceTransparency
     }
 
     private fun bind(view: View, layout: String, cornerDp: Int?) {
         if (plates.containsKey(view)) return
         val effect = createPlate(layout, cornerDp)
         plates[view] = effect
-        view.addOnLayoutChangeListener { target, _, _, _, _, _, _, _, _ -> update(target, effect) }
-        val lifecycle = object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(v: View) {
-                OneShotPreDrawListener.add(v) { update(v, effect) }
-            }
-            override fun onViewDetachedFromWindow(v: View) {
-                v.overlay.remove(effect)
-                effect.restoreBackground()
+        val binding = PlateBinding(layout, cornerDp, effect)
+        bindings[view] = binding
+        view.addOnLayoutChangeListener(binding)
+        view.addOnAttachStateChangeListener(binding)
+        if (view.isAttachedToWindow) binding.onViewAttachedToWindow(view)
+    }
+
+    private inner class PlateBinding(
+        val layout: String, val corner: Int?, private val effect: Plate,
+    ) : View.OnLayoutChangeListener, View.OnAttachStateChangeListener {
+        private var preDraw: OneShotPreDrawListener? = null
+
+        override fun onLayoutChange(view: View, left: Int, top: Int, right: Int, bottom: Int,
+                                    oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int) {
+            update(view, effect)
+        }
+
+        override fun onViewAttachedToWindow(view: View) {
+            preDraw?.removeListener()
+            preDraw = OneShotPreDrawListener.add(view) {
+                preDraw = null
+                update(view, effect)
             }
         }
-        view.addOnAttachStateChangeListener(lifecycle)
-        if (view.isAttachedToWindow) lifecycle.onViewAttachedToWindow(view)
+
+        override fun onViewDetachedFromWindow(view: View) {
+            preDraw?.removeListener()
+            preDraw = null
+            view.overlay.remove(effect)
+            effect.restoreBackground()
+        }
+
+        fun close(view: View) {
+            view.removeOnLayoutChangeListener(this)
+            view.removeOnAttachStateChangeListener(this)
+            onViewDetachedFromWindow(view)
+        }
+    }
+
+    fun exportState(): Array<Any> = buildList<Any> {
+        for ((view, binding) in bindings) add(arrayOf(WeakReference(view), binding.layout, binding.corner, null))
+        for ((view, guide) in guideParts) add(guide.export(view))
+    }.toTypedArray()
+
+    fun importState(state: Any?) {
+        for (entry in state as? Array<*> ?: return) {
+            val row = entry as? Array<*> ?: continue
+            val view = (row.getOrNull(0) as? WeakReference<*>)?.get() as? View ?: continue
+            val layout = row.getOrNull(1) as? String ?: continue
+            val panel = (row.getOrNull(3) as? WeakReference<*>)?.get() as? View
+            if (layout in GUIDES) {
+                if (panel == null || guideParts.containsKey(view)) continue
+                val guide = GuideBinding(panel, layout)
+                guideParts[view] = guide
+                view.addOnAttachStateChangeListener(guide)
+                if (view.isAttachedToWindow) guide.onViewAttachedToWindow(view)
+            } else bind(view, layout, row.getOrNull(2) as? Int)
+        }
+    }
+
+    fun close() {
+        closed = true
+        main.removeCallbacksAndMessages(null)
+        observer?.let { runCatching { runtime.context.contentResolver.unregisterContentObserver(it) } }
+        observer = null
+        for ((view, binding) in bindings.entries.toList()) binding.close(view)
+        for ((view, guide) in guideParts.entries.toList()) guide.close(view)
+        for (view in screenshotPlates.keys.toList()) view.invalidate()
+        bindings.clear()
+        plates.clear()
+        guideParts.clear()
+        screenshotPlates.clear()
     }
 
     private fun update(view: View, effect: Plate) {
@@ -435,6 +519,5 @@ internal class CaptureToolbarGlass(private val runtime: GlassCaptureRuntime) {
             "zoom_toolbar_layout" to anchors("zoom_in", "zoom_out"),
         )
 
-        fun install(runtime: GlassCaptureRuntime, loader: ClassLoader?) = CaptureToolbarGlass(runtime).install(loader)
     }
 }

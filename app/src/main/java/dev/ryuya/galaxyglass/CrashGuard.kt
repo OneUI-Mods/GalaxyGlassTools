@@ -69,15 +69,32 @@ class CrashGuard private constructor(context: Context, fileName: String) {
         @Throws(Exception::class)
         fun enter(context: Context): CrashGuard = enter(context, context.packageName, FILE)
 
+        internal fun resume(context: Context): CrashGuard = CrashGuard(context, FILE).also { guard ->
+            guard.file.openRead().use(guard.state::load)
+        }
+
+        internal fun resumeAppearanceHelper(context: Context, process: String): CrashGuard {
+            val file = if (isSystemUiAppearanceHelper(process)) "$FILE.${process.removePrefix(SYSTEM_UI_PREFIX)}"
+                else "$FILE.systemapp.${process.substringAfter(':', "main")}"
+            return CrashGuard(context, file).also { it.file.openRead().use(it.state::load) }
+        }
+
         internal fun enterSystemUiAppearanceHelper(context: Context, process: String): CrashGuard {
             require(isSystemUiAppearanceHelper(process))
             return enter(context, process, "$FILE.${process.removePrefix(SYSTEM_UI_PREFIX)}")
         }
 
+        internal fun resumeApplicationGlass(context: Context, process: String): CrashGuard =
+            CrashGuard(context, applicationGlassFile(process)).also { it.file.openRead().use(it.state::load) }
+
         internal fun enterApplicationGlass(context: Context, process: String): CrashGuard {
-            val suffix = process.substringAfter(':', "main").replace(Regex("[^a-zA-Z0-9._-]"), "_")
             val recovery = if (process == "com.android.chrome") "chrome-custom-tab-background" else null
-            return enter(context, process, "$FILE.systemapp.$suffix", recovery)
+            return enter(context, process, applicationGlassFile(process), recovery)
+        }
+
+        private fun applicationGlassFile(process: String): String {
+            val suffix = process.substringAfter(':', "main").replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            return "$FILE.systemapp.$suffix"
         }
 
         private fun enter(

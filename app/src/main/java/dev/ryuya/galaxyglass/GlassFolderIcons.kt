@@ -175,6 +175,8 @@ internal class GlassFolderIcons(
         else -> null
     }
 
+    fun idleForHotReload() = !queued
+
     fun refresh() = seen.keys.filter(View::isAttachedToWindow).forEach(View::invalidate)
 
     private fun requestPreview(

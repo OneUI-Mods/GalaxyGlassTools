@@ -3,24 +3,31 @@ package dev.ryuya.galaxyglass
 import android.content.Context
 import android.database.ContentObserver
 import android.os.Handler
-import android.os.PowerManager
 import android.provider.Settings
 import dev.ryuya.galaxyglass.compat.DexSymbols
 
 /** Tracks the ordinary, interactive keyguard surface from SystemUI's own window state. */
 internal class GlassLockScreenState(
-    context: Context,
+    private val context: Context,
     loader: ClassLoader,
     private val main: Handler,
     changed: () -> Unit,
 ) {
     private var showing = false
     private var observedWindowState = false
-    private var interactive = context.getSystemService(PowerManager::class.java)?.isInteractive == true
+    private var interactive = false
     private val resolver = context.contentResolver
     private var reduceTransparency = Settings.System.getInt(resolver, REDUCE_TRANSPARENCY, 0) != 0
     private val dispatchChanged = Runnable(changed)
     val visible: Boolean get() = showing && interactive && !reduceTransparency
+
+    private var transparency: ContentObserver? = null
+
+    fun close() {
+        transparency?.let { context.contentResolver.unregisterContentObserver(it) }
+        transparency = null
+        main.removeCallbacks(dispatchChanged)
+    }
 
     init {
         val owner = DexSymbols.findClass("com.android.systemui.shade.NotificationShadeWindowControllerImpl", false, loader)
@@ -56,14 +63,15 @@ internal class GlassLockScreenState(
                 }
             }.onFailure { HookEntry.log("GLASS_LOCK_SCREEN_INITIAL_STATE_UNAVAILABLE ${it.javaClass.simpleName}") }
         }
-        resolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false,
-            object : ContentObserver(main) {
-                override fun onChange(selfChange: Boolean) {
-                    val wasVisible = visible
-                    reduceTransparency = Settings.System.getInt(resolver, REDUCE_TRANSPARENCY, 0) != 0
-                    if (wasVisible != visible) notifyChanged()
-                }
-            })
+        val observer = object : ContentObserver(main) {
+            override fun onChange(selfChange: Boolean) {
+                val wasVisible = visible
+                reduceTransparency = Settings.System.getInt(resolver, REDUCE_TRANSPARENCY, 0) != 0
+                if (wasVisible != visible) notifyChanged()
+            }
+        }
+        resolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false, observer)
+        transparency = observer
     }
 
     fun setInteractive(value: Boolean) {

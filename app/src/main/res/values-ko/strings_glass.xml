@@ -53,4 +53,5 @@
     <string name="glass_settings_other_system_apps">기타 시스템 앱</string>
     <string name="glass_settings_master_off_notice">글라스 효과 전체 스위치가 꺼져 있습니다.</string>
     <string name="glass_settings_preview_only">이 기기에서는 미리 보기만 사용할 수 있습니다.</string>
+    <string name="glass_pip_playback_position">재생 위치</string>
 </resources>

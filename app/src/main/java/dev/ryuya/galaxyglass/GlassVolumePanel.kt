@@ -29,9 +29,9 @@ import kotlin.math.min
 /** Draws into native background layers below the volume controls. */
 @RequiresApi(33)
 internal class GlassVolumePanel(
-    app: Context,
+    private val app: Context,
     loader: ClassLoader,
-    main: Handler,
+    private val main: Handler,
     worker: Executor,
     private val material: GlassMaterial,
     private val pluginDiscovery: VolumePluginDiscovery?,
@@ -54,6 +54,8 @@ internal class GlassVolumePanel(
     }
     private val nativeIds = AnchorIds.read(app.resources, app.packageName, "volume_panel", "volume_panel_dual_view_background")
     private var reduceTransparency = reducedTransparency(app)
+    private var transparency: ContentObserver? = null
+    private var retired = false
 
     init {
         val handles = mutableListOf<ModernHook.Handle>()
@@ -75,15 +77,17 @@ internal class GlassVolumePanel(
                 HookEntry.log("GLASS_VOLUME_AOSP_UNAVAILABLE ${it.javaClass.simpleName}")
             }
             pluginDiscovery?.observe { context, pluginLoader ->
-                worker.execute { prepareSoundAssistant(context, pluginLoader, main) }
+                worker.execute { prepareSoundAssistant(context, pluginLoader) }
             }
-            app.contentResolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false,
-                object : ContentObserver(main) {
-                    override fun onChange(selfChange: Boolean) {
-                        reduceTransparency = reducedTransparency(app)
-                        refresh()
-                    }
-                })
+            val observer = object : ContentObserver(main) {
+                override fun onChange(selfChange: Boolean) {
+                    if (retired) return
+                    reduceTransparency = reducedTransparency(app)
+                    refresh()
+                }
+            }
+            app.contentResolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false, observer)
+            transparency = observer
         } catch (error: Throwable) {
             handles.asReversed().forEach(ModernHook.Handle::unhook)
             throw error
@@ -134,7 +138,7 @@ internal class GlassVolumePanel(
         HookEntry.log("GLASS_VOLUME_AOSP_READY")
     }
 
-    private fun prepareSoundAssistant(context: Context, loader: ClassLoader, main: Handler) {
+    private fun prepareSoundAssistant(context: Context, loader: ClassLoader) {
         runCatching {
             val resources = context.resources
             val ids = AnchorIds.read(resources, SOUND_ASSISTANT, "volume_star", "volume_star_dual_view")
@@ -163,6 +167,7 @@ internal class GlassVolumePanel(
             val expanded = Class.forName(requireNotNull(windows["expanded"]), false, loader).asSubclass(Dialog::class.java)
             check(standard != expanded)
             main.post {
+                if (retired) return@post
                 runCatching {
                     val standardHook = watchStart(standard, expanded = false, ids)
                     try {
@@ -205,9 +210,9 @@ internal class GlassVolumePanel(
         val panel = Panel(decor, expanded, ids, aospRoot) { owner.get()?.let(::stop) }
         panels[dialog] = panel
         active = panel
-        // Dialog.onStart runs before the window is added. post() runs after it is attached.
-        decor.post {
-            if (panels[dialog] !== panel || !dialog.isShowing) return@post
+        // Dialog.onStart runs before the window is added. The owner handler runs after show().
+        main.post {
+            if (retired || panels[dialog] !== panel || !dialog.isShowing) return@post
             safely {
                 refreshUnlock()
                 val name = dialog.javaClass.name
@@ -225,6 +230,18 @@ internal class GlassVolumePanel(
             backdrop.clear()
         }
         panel.stop()
+    }
+
+    fun idleForHotReload() = panels.keys.none(Dialog::isShowing)
+
+    fun close() {
+        retired = true
+        try {
+            transparency?.let { app.contentResolver.unregisterContentObserver(it) }
+        } finally {
+            transparency = null
+            panels.keys.toList().forEach(::stop)
+        }
     }
 
     fun refresh() {

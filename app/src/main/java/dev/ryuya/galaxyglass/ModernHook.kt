@@ -53,11 +53,13 @@ object ModernHook {
                 .hook(executable)
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept { chain ->
-                    val param = Param(chain)
-                    callback.before(param)
-                    param.proceed(chain)
-                    callback.after(param)
-                    param.resultOrThrow()
+                    GlassHookDispatch.invoke(chain) {
+                        val param = Param(chain)
+                        callback.before(param)
+                        param.proceed(chain)
+                        callback.after(param)
+                        param.resultOrThrow()
+                    }
                 }
         return Handle { handle.unhook() }
     }
@@ -72,7 +74,7 @@ object ModernHook {
             requireModule()
                 .hook(executable)
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(around::run)
+                .intercept { chain -> GlassHookDispatch.invoke(chain) { around.run(chain) } }
         return Handle { handle.unhook() }
     }
 

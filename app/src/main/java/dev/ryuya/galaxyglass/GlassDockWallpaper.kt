@@ -50,6 +50,7 @@ internal class GlassDockWallpaper(
     private val screenToLocal = Matrix()
     private val shaderToLocal = Matrix()
     private val mappedBounds = RectF()
+    private val nextCrop = Rect()
     private var region: Region? = null
     private var texture: Bitmap? = null
     private var shader: BitmapShader? = null
@@ -81,21 +82,25 @@ internal class GlassDockWallpaper(
         view.transformMatrixToGlobal(localToScreen)
         mappedBounds.set(bounds)
         localToScreen.mapRect(mappedBounds)
-        val crop = Rect()
-        mappedBounds.roundOut(crop)
-        crop.inset(-padding, -padding)
-        if (!crop.intersect(0, 0, display.width(), display.height())) {
+        val width = display.width()
+        val height = display.height()
+        mappedBounds.roundOut(nextCrop)
+        nextCrop.inset(-padding, -padding)
+        if (!nextCrop.intersect(0, 0, width, height)) {
             clear()
             return
         }
-        val next = Region(display.width(), display.height(), crop)
-        if (region == next) {
+        val previous = region
+        if (previous != null && previous.width == width && previous.height == height &&
+            previous.crop == nextCrop
+        ) {
             if (resuming) dirty()
             return
         }
         clear()
         paused = false
-        region = next
+        // The capture worker owns the published coordinates until its request finishes.
+        region = Region(width, height, Rect(nextCrop))
         dirty()
     }
 

@@ -49,4 +49,5 @@
     <string name="glass_settings_other_system_apps">Other system apps</string>
     <string name="glass_settings_master_off_notice">Glass effects are off globally.</string>
     <string name="glass_settings_preview_only">Preview only on this device.</string>
+    <string name="glass_pip_playback_position">Playback position</string>
 </resources>

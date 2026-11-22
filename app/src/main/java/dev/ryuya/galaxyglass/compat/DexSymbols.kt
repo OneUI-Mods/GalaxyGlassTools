@@ -56,6 +56,14 @@ object DexSymbols {
     @Volatile private var prepared = false
     @Volatile private var reviewedHost = false
     private val waiting = mutableListOf<() -> Unit>()
+    private var attachedObserver: Pair<Context, ContentObserver>? = null
+
+    fun detachObserver() {
+        attachedObserver?.let { (context, observer) ->
+            runCatching { context.contentResolver.unregisterContentObserver(observer) }
+        }
+        attachedObserver = null
+    }
 
     /** Unknown host versions wait for proof without blocking the application's main thread. */
     fun whenPrepared(context: Context, action: () -> Unit) {
@@ -178,11 +186,12 @@ object DexSymbols {
             val observer =
                 object : ContentObserver(Handler(Looper.getMainLooper())) {
                     override fun onChange(selfChange: Boolean) {
-                        if (read()) context.contentResolver.unregisterContentObserver(this)
+                        if (read()) detachObserver()
                     }
                 }
+            attachedObserver = context to observer
             context.contentResolver.registerContentObserver(uri, false, observer)
-            if (read()) context.contentResolver.unregisterContentObserver(observer)
+            if (read()) detachObserver()
         }
     }
 

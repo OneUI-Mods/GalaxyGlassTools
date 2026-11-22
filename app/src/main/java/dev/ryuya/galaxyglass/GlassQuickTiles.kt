@@ -6,7 +6,7 @@ import androidx.annotation.RequiresApi
 import dev.ryuya.galaxyglass.compat.DexSymbols
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier as JvmModifier
-import java.lang.reflect.Proxy
+import java.lang.reflect.InvocationHandler
 import java.util.WeakHashMap
 
 /** Styles only the native background containers. Tile labels and icons stay on Samsung's drawing path. */
@@ -27,6 +27,7 @@ internal class GlassQuickTiles(
     private val onEditorDrawn: () -> Unit,
     private val onVolumeDrawn: () -> Unit,
     private val onSurface: (String, GlassSurfaceStage) -> Unit,
+    previousDraws: Any? = null,
 ) {
     private enum class Surface(val profile: GlassMaterial.Profile) {
         CARD(GlassMaterial.Profile.QUICK_CONTROL),
@@ -84,6 +85,7 @@ internal class GlassQuickTiles(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Clip, Any>?) = size > 24
     }
     private val invalidateDraw: Method?
+    private val callbacks = GlassComposeCallbacks()
 
     init {
         fun type(name: String) = DexSymbols.findClass(name, false, loader)
@@ -119,7 +121,7 @@ internal class GlassQuickTiles(
         }
         val draw = type("androidx.compose.ui.draw.DrawModifierKt").getMethod("drawWithContent", modifier, function)
 
-        fun overlay(surface: Surface, nativeShape: Any): Any = modifiers.getOrPut(Clip(surface, nativeShape)) {
+        fun overlayDraw(surface: Surface, nativeShape: Any): InvocationHandler {
             var lastSize: Size? = null
             var geometry: GlassQuickOutline.Geometry? = null
 
@@ -159,7 +161,7 @@ internal class GlassQuickTiles(
                 return Frame(canvas, shape, light, screenX, screenY)
             }
 
-            val callback = Proxy.newProxyInstance(function.classLoader, arrayOf(function)) { proxy, called, args ->
+            return InvocationHandler { proxy, called, args ->
                 when (called.name) {
                     invoke.name -> {
                         val nativeScope = requireNotNull(args?.firstOrNull())
@@ -195,12 +197,16 @@ internal class GlassQuickTiles(
                     else -> null
                 }
             }
+        }
+        fun overlay(surface: Surface, nativeShape: Any): Any = modifiers.getOrPut(Clip(surface, nativeShape)) {
+            val callback = callbacks.create(arrayOf("overlay", surface.name, nativeShape),
+                function, drawContent, invoke, unit, overlayDraw(surface, nativeShape))
             requireNotNull(draw.invoke(null, emptyModifier, callback))
         }
         val drawingSurface = ThreadLocal<Surface>()
         val masks = mutableMapOf<Surface, Any>()
-        fun mask(surface: Surface): Any = masks.getOrPut(surface) {
-            val callback = Proxy.newProxyInstance(function.classLoader, arrayOf(function)) { proxy, called, args ->
+        fun maskDraw(surface: Surface): InvocationHandler =
+            InvocationHandler { proxy, called, args ->
                 when (called.name) {
                     invoke.name -> {
                         val nativeScope = requireNotNull(args?.firstOrNull())
@@ -219,9 +225,21 @@ internal class GlassQuickTiles(
                     else -> null
                 }
             }
+        fun mask(surface: Surface): Any = masks.getOrPut(surface) {
+            val callback = callbacks.create(arrayOf("mask", surface.name),
+                function, drawContent, invoke, unit, maskDraw(surface))
             requireNotNull(draw.invoke(null, emptyModifier, callback))
         }
 
+        callbacks.reconnect(previousDraws, drawContent, unit) { descriptor ->
+            val surface = Surface.entries.firstOrNull { it.name == descriptor.getOrNull(1) }
+                ?: return@reconnect null
+            when (descriptor.firstOrNull()) {
+                "mask" -> maskDraw(surface)
+                "overlay" -> descriptor.getOrNull(2)?.let { overlayDraw(surface, it) }
+                else -> null
+            }
+        }
         installNativePlates(loader, modifier, then, drawingSurface, ::mask, ::overlay)
         runCatching { installHeaderActions(loader, resources, modifier, then, ::overlay) }
             .onFailure { HookEntry.log("GLASS_QUICK_HEADER_ACTIONS_UNAVAILABLE ${it.javaClass.simpleName}") }
@@ -583,6 +601,14 @@ internal class GlassQuickTiles(
         val name = if (surface == Surface.EDITOR) GlassSystemCatalog.EDITOR
             else GlassSystemCatalog.QUICK_COMPOSE_PREFIX + surface.name.lowercase()
         onSurface(name, stage)
+    }
+
+    fun stateForReload() = callbacks.stateForReload()
+
+    fun close() {
+        callbacks.detach()
+        refresh()
+        modifiers.clear()
     }
 
     fun refresh() {

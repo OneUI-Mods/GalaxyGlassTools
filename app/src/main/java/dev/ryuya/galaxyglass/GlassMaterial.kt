@@ -2,7 +2,6 @@ package dev.ryuya.galaxyglass
 
 import android.content.SharedPreferences
 import android.graphics.Canvas
-import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RadialGradient
@@ -10,6 +9,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import kotlin.math.min
 
@@ -24,6 +24,18 @@ internal data class GlassAppearance(
     val systemSurfaces: Boolean = false,
     val lockScreen: Boolean = false,
 ) {
+    fun stateForReload() = Bundle().apply {
+        putBoolean(QUICK, quick)
+        putBoolean(NOTIFICATIONS, notifications)
+        putBoolean(HOME, home)
+        putInt(STRENGTH, strength)
+        putInt(TINT, tint)
+        putBoolean(VOLUME, volume)
+        putInt("volume", volumeTheme)
+        putBoolean(SYSTEM_SURFACES, systemSurfaces)
+        putBoolean(LOCK_SCREEN, lockScreen)
+    }
+
     companion object {
         const val QUICK = "glass_quick"
         const val NOTIFICATIONS = "glass_notifications"
@@ -35,6 +47,18 @@ internal data class GlassAppearance(
         const val TINT = "glass_tint"
         const val DEFAULT_STRENGTH = 60
         const val DEFAULT_TINT = 50
+
+        fun read(config: Bundle) = GlassAppearance(
+            quick = config.getBoolean(QUICK),
+            notifications = config.getBoolean(NOTIFICATIONS),
+            home = config.getBoolean(HOME),
+            strength = config.getInt(STRENGTH, DEFAULT_STRENGTH),
+            tint = config.getInt(TINT, DEFAULT_TINT),
+            volume = config.getBoolean(VOLUME),
+            volumeTheme = config.getInt("volume"),
+            systemSurfaces = config.getBoolean(SYSTEM_SURFACES),
+            lockScreen = config.getBoolean(LOCK_SCREEN),
+        )
 
         // UIKit rounds its normalized value to the nearest twentieth.
         fun tintPercent(value: Int): Int = ((value.coerceIn(0, 100) + 2) / 5) * 5
@@ -68,9 +92,11 @@ internal class GlassMaterial(private val density: Float) {
         if (Build.VERSION.SDK_INT < 33) null else runCatching { GlassSurfaceLighting(density) }
             .onFailure { Log.w("GalaxyGlassTools", "Glass bevel unavailable", it) }.getOrNull()
     }
-    private data class Finish(val body: Shader, val edge: Shader)
-    private val gradients = object : LinkedHashMap<Lighting, Finish>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Lighting, Finish>?) = size > 16
+    private var lightingGeneration = -1L
+    private val gradients = object : LinkedHashMap<Lighting, GlassGradients>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<Lighting, GlassGradients>?,
+        ) = size > 16
     }
 
     private data class Lighting(
@@ -125,7 +151,15 @@ internal class GlassMaterial(private val density: Float) {
         if (width < 6f * density || height < 6f * density || strength <= 0 || opacity <= 0f ||
             canvas.quickReject(left, top, right, bottom)) return false
         val lighting = Lighting(height.toInt(), width.toInt(), strength.coerceIn(0, 100), dark, tint, profile)
-        val finish = gradients.getOrPut(lighting) { lighting.build() }
+        val code = GlassLightingRuntime.capture()
+        if (lightingGeneration != code.generation) {
+            lightingGeneration = code.generation
+            gradients.clear()
+        }
+        val finish = gradients.getOrPut(lighting) {
+            GlassLightingRuntime.gradients(code, lighting.width, lighting.height, lighting.strength,
+                lighting.dark, lighting.tint, lighting.profile)
+        }
         // A single line follows the native corner curve just inside the clip.
         val lineWidth = (0.54f + strength * 0.0032f) * density
         val inset = lineWidth * 0.64f
@@ -180,87 +214,6 @@ internal class GlassMaterial(private val density: Float) {
             canvas.restoreToCount(save)
         }
         return true
-    }
-
-    private fun Lighting.build(): Finish {
-        fun color(rgb: Int, alpha: Int): Int = (alpha * strength / 100 shl 24) or rgb
-        fun fillTint(rgb: Int, alpha: Int): Int = color(rgb, (alpha * tintFactor(tint)).toInt().coerceIn(0, 255))
-        val white = if (profile == Profile.STANDARD) 0xf5f8ff else 0xf8f9fb
-        val shade = 0x111a29
-        val bodyColors: IntArray
-        val edgeColors: IntArray
-        when (profile) {
-            Profile.APP_CHROME -> {
-                // Flush bars fade into the surrounding content instead of lighting up all four edges.
-                val tone = if (dark) 0x667b91 else 0x8ca6bc
-                val horizontal = width >= height
-                val wash = LinearGradient(0f, 0f,
-                    if (horizontal) 0f else width.toFloat(), if (horizontal) height.toFloat() else 0f,
-                    intArrayOf(tone, fillTint(tone, if (dark) 50 else 43), tone),
-                    floatArrayOf(0f, .42f, 1f), Shader.TileMode.CLAMP)
-                return Finish(wash, wash)
-            }
-            Profile.STANDARD -> {
-                bodyColors = if (dark) {
-                    intArrayOf(color(white, 20), fillTint(0x202633, 54), fillTint(0x141c28, 71))
-                } else {
-                    intArrayOf(fillTint(white, 72), fillTint(0xe7eff6, 46), fillTint(0xe2eaf2, 30))
-                }
-                edgeColors = intArrayOf(color(white, 204), color(white, 101),
-                    color(shade, if (dark) 76 else 55), color(white, if (dark) 86 else 119))
-            }
-            Profile.QUICK_CONTROL -> {
-                val tintColor = if (dark) 0x1d2026 else 0xf5f6f9
-                bodyColors = intArrayOf(color(white, 23), fillTint(tintColor, 45), fillTint(tintColor, 58))
-                edgeColors = intArrayOf(color(white, 198), color(white, 91), color(shade, 108), color(white, 113))
-            }
-            Profile.VOLUME -> {
-                val tintColor = if (dark) 0x222934 else 0xf4f8fc
-                bodyColors = intArrayOf(color(white, 31), fillTint(tintColor, 49), fillTint(tintColor, 67))
-                edgeColors = intArrayOf(color(white, 212), color(white, 96), color(shade, 108), color(white, 128))
-            }
-            Profile.PRIVACY_PANEL -> {
-                bodyColors = if (dark) {
-                    intArrayOf(fillTint(0x4d5158, 48), fillTint(0x41454c, 44), fillTint(0x383c43, 42))
-                } else {
-                    intArrayOf(fillTint(white, 80), fillTint(0xe6edf4, 53), fillTint(0xdbe4ed, 48))
-                }
-                edgeColors = intArrayOf(color(white, 111), color(white, 58),
-                    color(shade, if (dark) 30 else 48), color(white, 56))
-            }
-            Profile.SYSTEM_SURFACE, Profile.POWER_ACTION -> {
-                bodyColors = if (dark) {
-                    intArrayOf(color(white, 27), fillTint(0x1c2430, 53), fillTint(0x101924, 68))
-                } else {
-                    intArrayOf(fillTint(white, 75), fillTint(0xe3edf4, 39), fillTint(0xcddce9, 52))
-                }
-                // Leave room for the curved inner highlight to illuminate this narrow outer rim.
-                edgeColors = intArrayOf(color(white, 157), color(white, 68),
-                    color(shade, if (dark) 94 else 82), color(0xc2dcf3, 107))
-            }
-            Profile.QUICK_GROUP, Profile.QUICK_SLIDER, Profile.NOTIFICATION -> {
-                val tintColor = if (dark) 0x23262d else 0xf5f6f9
-                val tintAlpha = when (profile) {
-                    Profile.QUICK_GROUP -> 27
-                    Profile.QUICK_SLIDER -> 36
-                    else -> 43
-                }
-                bodyColors = intArrayOf(color(white, 17), fillTint(tintColor, tintAlpha), fillTint(tintColor, tintAlpha + 7))
-                val highlight = if (profile == Profile.QUICK_SLIDER) 161 else 131
-                edgeColors = intArrayOf(color(white, highlight), color(white, 57), color(shade, 99), color(white, 66))
-            }
-        }
-        val body = LinearGradient(
-            0f, 0f, width * 0.52f, height.toFloat(),
-            bodyColors,
-            floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP,
-        )
-        val edge = LinearGradient(
-            0f, 0f, width * 0.60f, height.toFloat(),
-            edgeColors,
-            floatArrayOf(0f, 0.30f, 0.67f, 1f), Shader.TileMode.CLAMP,
-        )
-        return Finish(body, edge)
     }
 
     private fun tintFactor(value: Int): Float = 0.35f + 1.3f * value / 100f

@@ -1,5 +1,6 @@
 package dev.ryuya.galaxyglass.hook
 
+import dev.ryuya.galaxyglass.GlassHookDispatch
 import dev.ryuya.galaxyglass.compat.compatibleName
 import io.github.libxposed.api.XposedInterface
 import java.lang.reflect.Executable
@@ -28,7 +29,7 @@ object Hooks {
                 .hook(method)
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .setId("galaxy-${ids.incrementAndGet()}")
-                .intercept(callback::intercept)
+                .intercept { chain -> GlassHookDispatch.invoke(chain) { callback.intercept(chain) } }
         )
 
     @JvmStatic

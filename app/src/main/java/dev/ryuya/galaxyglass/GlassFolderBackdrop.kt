@@ -56,6 +56,7 @@ internal class GlassFolderBackdrop(
     private val getMode = blurInfo.type.getMethod("getBlurMode")
     private val getBitmap = blurInfo.type.getMethod("getCapturedBitmap")
     private val surfaces = WeakHashMap<View, Plate>()
+    private val attachments = WeakHashMap<View, View.OnAttachStateChangeListener>()
     private val active = WeakHashMap<Any, Motion>()
     private val motionByView = WeakHashMap<View, Motion>()
     private val reported = mutableSetOf<Role>()
@@ -112,6 +113,19 @@ internal class GlassFolderBackdrop(
             popup.isInstance(view) && view is ViewGroup -> child(view, stroke)?.let(::watchStroke)
             full.isInstance(view) -> styleFullFolder(view)
         }
+    }
+
+    fun idleForHotReload() = active.isEmpty()
+
+    fun close() {
+        for ((view, listener) in attachments.toList()) view.removeOnAttachStateChangeListener(listener)
+        attachments.clear()
+        for ((view, plate) in surfaces.toList()) {
+            plate.clearCrop()
+            if (view.background === plate) view.background = plate.drawable
+        }
+        surfaces.clear()
+        motionByView.clear()
     }
 
     fun refresh() {
@@ -214,10 +228,12 @@ internal class GlassFolderBackdrop(
         if (view in surfaces) return
         val plate = Plate(view, null, 0f, Role.POPUP)
         surfaces[view] = plate
-        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+        val listener = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) = safely("popup") { styleStroke(view) }
             override fun onViewDetachedFromWindow(view: View) = plate.clearCrop()
-        })
+        }
+        attachments[view] = listener
+        view.addOnAttachStateChangeListener(listener)
         if (view.isAttachedToWindow) styleStroke(view)
     }
 

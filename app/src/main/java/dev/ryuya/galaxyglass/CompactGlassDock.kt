@@ -49,11 +49,16 @@ internal class CompactGlassDock(
         if (view in holders) return
         val dock = Dock(view)
         holders[view] = dock
-        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(view: View) = dock.start()
-            override fun onViewDetachedFromWindow(view: View) = dock.stop()
-        })
+        view.addOnAttachStateChangeListener(dock.attachment)
         if (view.isAttachedToWindow) dock.start()
+    }
+
+    fun close() {
+        for ((view, dock) in holders.toList()) {
+            view.removeOnAttachStateChangeListener(dock.attachment)
+            dock.stop()
+        }
+        holders.clear()
     }
 
     fun refresh() = holders.values.toList().forEach { it.refresh() }
@@ -88,6 +93,10 @@ internal class CompactGlassDock(
         private val scrollListener = ViewTreeObserver.OnScrollChangedListener { plate?.wallpaperMoved() }
         private var observer: ViewTreeObserver? = null
         private var plate: Plate? = null
+        val attachment = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = start()
+            override fun onViewDetachedFromWindow(view: View) = stop()
+        }
 
         fun start() {
             val view = host.get() ?: return

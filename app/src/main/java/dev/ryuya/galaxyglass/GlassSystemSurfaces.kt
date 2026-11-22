@@ -31,6 +31,7 @@ import kotlin.math.roundToInt
 @RequiresApi(33)
 internal class GlassSystemSurfaces(
     private val app: Application,
+    loader: ClassLoader,
     private val main: Handler,
     private val strength: () -> Int,
     private val lockStrength: () -> Int,
@@ -57,8 +58,11 @@ internal class GlassSystemSurfaces(
     private val artworkId = app.resources.getIdentifier("sec_album_art", "id", app.packageName)
     private val parentPanelId = app.resources.getIdentifier("parentPanel", "id", "android")
     private val samsungParentPanelId = app.resources.getIdentifier("parentPanel", "id", app.packageName)
-    private var reduceTransparency = reducedTransparency()
+    @Volatile private var reduceTransparency = reducedTransparency()
     private var tips: GlassSamsungTips? = null
+    private var transparency: ContentObserver? = null
+    @Volatile private var retired = false
+    private val pipSeekInput = if (canUseShadeBackdrop) GlassPipSeekInput(loader) else null
     private val blurRadiusField = runCatching {
         DexSymbols.findClass("com.android.internal.policy.PhoneWindow")
             .getDeclaredField("mBackgroundBlurRadius").apply { isAccessible = true }
@@ -107,16 +111,55 @@ internal class GlassSystemSurfaces(
         if (canUseShadeBackdrop) runCatching { installNotificationControls() }.onFailure {
             HookEntry.log("GLASS_NOTIFICATION_CONTROLS_UNAVAILABLE ${it.javaClass.simpleName}")
         }
-        app.contentResolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false,
-            object : ContentObserver(main) {
-                override fun onChange(selfChange: Boolean) {
-                    reduceTransparency = reducedTransparency()
-                    refresh()
-                    onTransparencyChanged()
-                }
-            })
+        val observer = object : ContentObserver(main) {
+            override fun onChange(selfChange: Boolean) {
+                if (retired) return
+                reduceTransparency = reducedTransparency()
+                refresh()
+                onTransparencyChanged()
+            }
+        }
+        app.contentResolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false, observer)
+        transparency = observer
         observeExistingShade()
         HookEntry.log("GLASS_SYSTEM_CATALOG_READY layouts=${catalog.size}")
+    }
+
+    fun stateForReload(): Array<Any> = arrayOf(
+        scopes.entries.map { (view, scope) -> arrayOf(WeakReference(view), scope.spec.name) }.toTypedArray(),
+        windows.values.toTypedArray(),
+    )
+
+    fun reconnect(saved: Any?) {
+        val state = saved as? Array<*> ?: return
+        val known = catalog.values.associateBy(GlassSystemCatalog.Surface::name)
+        for (item in (state.getOrNull(0) as? Array<*>).orEmpty()) {
+            val pair = item as? Array<*> ?: continue
+            val view = (pair.getOrNull(0) as? WeakReference<*>)?.get() as? View ?: continue
+            known[pair.getOrNull(1)]?.let { observe(view, it) }
+        }
+        for (item in (state.getOrNull(1) as? Array<*>).orEmpty()) {
+            val window = (item as? WeakReference<*>)?.get() as? Window ?: continue
+            observeWindow(window)
+        }
+    }
+
+    fun close() {
+        retired = true
+        transparency?.let { runCatching { app.contentResolver.unregisterContentObserver(it) } }
+        transparency = null
+        runCatching { tips?.close() }
+        for ((view, scope) in scopes.toList()) {
+            runCatching {
+                view.removeOnAttachStateChangeListener(scope)
+                scope.onViewDetachedFromWindow(view)
+            }.onFailure { HookEntry.log("GLASS_SYSTEM_SCOPE_RETIRE ${it.javaClass.simpleName}") }
+        }
+        scopes.clear()
+        owners.clear()
+        windows.clear()
+        refracting.clear()
+        notificationPlates.clear()
     }
 
     fun refresh() {
@@ -324,6 +367,7 @@ internal class GlassSystemSurfaces(
     }
 
     private fun observe(view: View, spec: GlassSystemCatalog.Surface) {
+        if (retired) return
         if (Looper.myLooper() != main.looper) {
             main.post { safely(spec.name) { observe(view, spec) } }
             return
@@ -337,6 +381,7 @@ internal class GlassSystemSurfaces(
     }
 
     private fun observeWindow(window: Window?) {
+        if (retired) return
         if (Looper.myLooper() != main.looper) {
             main.post { safely("dialog") { observeWindow(window) } }
             return
@@ -409,8 +454,12 @@ internal class GlassSystemSurfaces(
         private val notificationEffect by lazy { GlassSystemSurfaceEffect(material, false) }
         private var notificationStage = GlassSurfaceStage.FOUND
         private var panelObserver: ViewTreeObserver? = null
+        private var firstDraw: OneShotPreDrawListener? = null
         private var panelStrength = -1
         private val hasPipButtons = spec.targets.any { it.pipButton }
+        private val isPipMenu = spec.name == "pip_menu" || spec.name == "sem_pip_menu"
+        private var pipProgress: GlassPipProgress? = null
+        private var triedPipProgress = false
         private var checkedPipUnlock = false
 
         override fun onViewAttachedToWindow(view: View) {
@@ -418,26 +467,40 @@ internal class GlassSystemSurfaces(
             view.addOnLayoutChangeListener(this)
             panelObserver = view.viewTreeObserver.also { observer ->
                 observer.addOnGlobalLayoutListener(this)
-                if (spec.name in EXISTING_PANEL_PLATES) observer.addOnPreDrawListener(this)
+                if (isPipMenu || spec.name in EXISTING_PANEL_PLATES) observer.addOnPreDrawListener(this)
             }
-            OneShotPreDrawListener.add(view, ::refresh)
+            firstDraw?.removeListener()
+            firstDraw = OneShotPreDrawListener.add(view, ::refresh)
         }
 
         override fun onViewDetachedFromWindow(view: View) {
+            firstDraw?.removeListener()
+            firstDraw = null
             if (spec.notificationControls == GlassSystemCatalog.NotificationControls.PLATE) notificationPlates.remove(view)
             view.removeOnLayoutChangeListener(this)
             panelObserver?.takeIf { it.isAlive }?.let { observer ->
                 observer.removeOnGlobalLayoutListener(this)
-                if (spec.name in EXISTING_PANEL_PLATES) observer.removeOnPreDrawListener(this)
+                if (isPipMenu || spec.name in EXISTING_PANEL_PLATES) observer.removeOnPreDrawListener(this)
             }
             panelObserver = null
             panelStrength = -1
+            pipProgress?.close()
+            pipProgress = null
+            triedPipProgress = false
             checkedPipUnlock = false
             restore()
         }
 
         override fun onPreDraw(): Boolean {
-            onGlobalLayout()
+            if (spec.name in EXISTING_PANEL_PLATES) onGlobalLayout()
+            if (isPipMenu && !retired) {
+                val root = view.get()
+                if (!triedPipProgress && root != null && visibleStrength(root) > 0) {
+                    triedPipProgress = true
+                    pipProgress = GlassPipProgress.attach(root, pipSeekInput) { !retired && visibleStrength(root) > 0 }
+                }
+                pipProgress?.updateVisibility()
+            }
             return true
         }
 

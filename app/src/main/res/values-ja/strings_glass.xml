@@ -53,4 +53,5 @@
     <string name="glass_settings_other_system_apps">その他のシステムアプリ</string>
     <string name="glass_settings_master_off_notice">ガラス表示の全体スイッチはオフです。</string>
     <string name="glass_settings_preview_only">この端末ではプレビューのみ利用できます。</string>
+    <string name="glass_pip_playback_position">再生位置</string>
 </resources>

@@ -27,6 +27,18 @@ internal class VolumePluginDiscovery(loader: ClassLoader) {
         }
     }
 
+    fun stateForReload(): Array<Any> = arrayOf(pluginContext, pluginLoader)
+
+    fun reconnect(saved: Any?) {
+        val state = saved as? Array<*> ?: return
+        val context = (state.getOrNull(0) as? WeakReference<*>)?.get() as? Context ?: return
+        val loader = (state.getOrNull(1) as? WeakReference<*>)?.get() as? ClassLoader ?: return
+        register(context, loader)
+    }
+
+    @Synchronized
+    fun close() { observer = null }
+
     @Synchronized
     fun observe(listener: (Context, ClassLoader) -> Unit) {
         observer = listener

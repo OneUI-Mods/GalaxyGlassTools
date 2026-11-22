@@ -29,6 +29,14 @@ internal class GlassSamsungTips(
     private val onDrawn: () -> Unit,
 ) {
     private val parts = WeakHashMap<ImageView, Part>()
+    private val attachments = WeakHashMap<ImageView, View.OnAttachStateChangeListener>()
+
+    fun close() {
+        attachments.forEach { (view, listener) -> view.removeOnAttachStateChangeListener(listener) }
+        attachments.clear()
+        parts.forEach { (view, part) -> part.restore(view) }
+        parts.clear()
+    }
     private var reported = false
     private var failureReported = false
 
@@ -81,15 +89,19 @@ internal class GlassSamsungTips(
         val part = Part(view, panel, source, stock, image)
         parts[view] = part
         part.install(view)
-        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+        attachments.remove(view)?.let(view::removeOnAttachStateChangeListener)
+        val listener = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) = Unit
             override fun onViewDetachedFromWindow(view: View) {
                 val imageView = view as ImageView
                 if (parts[imageView] === part) parts.remove(imageView)
                 part.restore(imageView)
+                attachments.remove(imageView)
                 view.removeOnAttachStateChangeListener(this)
             }
-        })
+        }
+        attachments[view] = listener
+        view.addOnAttachStateChangeListener(listener)
     }
 
     private inner class Part(

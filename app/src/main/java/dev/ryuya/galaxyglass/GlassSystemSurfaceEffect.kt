@@ -41,6 +41,7 @@ internal class GlassSystemSurfaceEffect(
     private var appliedAlpha: Int? = null
     private var placement: Placement? = null
     private var nativeOutline = false
+    private var appliedTint = material.tint
 
     private enum class Placement { BACKGROUND, OVERLAY }
 
@@ -66,10 +67,15 @@ internal class GlassSystemSurfaceEffect(
             restore(view)
             return false
         }
+        val dark = view.resources.configuration.isNightModeActive
+        val appearanceChanged = !pipButton || placement == null || layer.strength != strength ||
+            layer.dark != dark || appliedTint != material.tint || layer.bounds != shape ||
+            !layer.radii.contentEquals(radii)
+        appliedTint = material.tint
         layer.strength = strength
-        layer.dark = view.resources.configuration.isNightModeActive
+        layer.dark = dark
         layer.setBounds(shape)
-        layer.radii.indices.forEach { layer.radii[it] = radii[it] }
+        radii.copyInto(layer.radii)
 
         if (stock == null && !powerActionIcon && !pipButton && !keepFill) {
             if (placement == Placement.OVERLAY) view.overlay.remove(layer)
@@ -90,7 +96,7 @@ internal class GlassSystemSurfaceEffect(
                 appliedAlpha = alpha
             } else restoreAlpha()
         }
-        layer.invalidateSelf()
+        if (appearanceChanged) layer.invalidateSelf()
         return true
     }
 

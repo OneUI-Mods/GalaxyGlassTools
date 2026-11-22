@@ -81,7 +81,8 @@ internal class GlassLauncherControls(
 
     private val views = WeakHashMap<View, Binding>()
     private val optionScreens = WeakHashMap<ViewGroup, QuickOptionScreen>()
-    private val pageActions = WeakHashMap<ViewGroup, Unit>()
+    private data class ActionWatch(val layout: View.OnLayoutChangeListener, val preDraw: OneShotPreDrawListener)
+    private val pageActions = WeakHashMap<ViewGroup, ActionWatch>()
     private val optionAccess = mutableMapOf<Class<*>, QuickOptionAccess>()
     private val optionTitleAccess = mutableMapOf<Class<*>, java.lang.reflect.Method>()
     private val reported = mutableSetOf<Role>()
@@ -172,11 +173,13 @@ internal class GlassLauncherControls(
     private val largeFolderRadiusId = resources.getIdentifier("enforced_rounded_corner_max_radius", "dimen", launcher)
     private val nativeCrop = if (edgeSettingsOnly) null else runCatching { NativeCrop() }.getOrNull()
     private var quickOptionType: Class<out ViewGroup>? = null
+    private var largeFolderType: Class<out View>? = null
     private var findLargeFolder: ((View) -> Unit)? = null
     private var tabIndicator: Class<out View>? = null
     private var reportedError = false
     private var reportedFrostedMenu = false
     private var tips: GlassSamsungTips? = null
+    private var retired = false
 
     init {
         install("launcher_plates") { hookLauncherPlates() }
@@ -370,6 +373,7 @@ internal class GlassLauncherControls(
             find(chain.thisObject as View)
             result
         }
+        largeFolderType = folder
         findLargeFolder = find
     }
 
@@ -564,29 +568,42 @@ internal class GlassLauncherControls(
 
     /** Also recognises controls which were inflated before the module became ready. */
     fun find(view: View) {
-        if (view.id != View.NO_ID && !ownsResource(view.resources, view.id)) return
-        if (tabIndicator?.isInstance(view) == true) findProfileIndicator(view)
-        findLargeFolder?.invoke(view)
-        if (pageActionsId != 0 && view.id == pageActionsId && view is ViewGroup) watchPageActions(view)
+        val id = view.id
+        val isTabIndicator = tabIndicator?.isInstance(view) == true
+        val isLargeFolder = largeFolderType?.isInstance(view) == true
+        val plate = persistentPlates[id]
+        val knownControl = id != View.NO_ID && id != 0 &&
+            (id == pageActionsId || id == homeScreenId || id == drawerId || id == optionId ||
+                id == tabsId || id == searchId || id == finderInputId || plate != null)
+        if (!isTabIndicator && !isLargeFolder && !knownControl) return
+        // Resource ownership matters only for views that can actually receive glass.
+        if (id != View.NO_ID && !ownsResource(view.resources, id)) return
+        if (isTabIndicator) findProfileIndicator(view)
+        if (isLargeFolder) findLargeFolder?.invoke(view)
+        if (pageActionsId != 0 && id == pageActionsId && view is ViewGroup) watchPageActions(view)
         val popup = quickOptionType
-        if (popup != null && (view.id == homeScreenId || view.id == drawerId) && view is ViewGroup) {
+        if (popup != null && (id == homeScreenId || id == drawerId) && view is ViewGroup) {
             watchOptionScreen(view, popup)
         }
-        persistentPlates[view.id]?.let { watch(view, it) }
+        plate?.let { watch(view, it) }
         findDrawerControl(view)
     }
 
     private fun watchPageActions(row: ViewGroup) {
-        if (pageActions.put(row, Unit) != null) return
+        if (row in pageActions) return
+        val watched = WeakReference(row)
         fun bind() = safely {
-            for (index in 0 until row.childCount) {
-                val child = row.getChildAt(index)
+            val host = watched.get() ?: return@safely
+            for (index in 0 until host.childCount) {
+                val child = host.getChildAt(index)
                 // Home Up adds its DIY label directly beside Samsung's two image buttons.
                 if (child is LinearLayout || child is TextView) watch(child, Role.PAGE_EDIT_ACTION)
             }
         }
-        OneShotPreDrawListener.add(row, ::bind)
-        row.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> bind() }
+        val layout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> bind() }
+        val first = OneShotPreDrawListener.add(row, ::bind)
+        pageActions[row] = ActionWatch(layout, first)
+        row.addOnLayoutChangeListener(layout)
     }
 
     private fun watchOptionScreen(view: ViewGroup, popupType: Class<out ViewGroup>) {
@@ -656,6 +673,40 @@ internal class GlassLauncherControls(
         }
     }
 
+    fun stateForReload(): Array<Array<Any>> = views.map { (view, binding) ->
+        arrayOf<Any>(WeakReference(view), binding.role.name)
+    }.toTypedArray()
+
+    fun reconnect(saved: Any?) {
+        for (item in (saved as? Array<*>).orEmpty()) {
+            val pair = item as? Array<*> ?: continue
+            val view = (pair.getOrNull(0) as? WeakReference<*>)?.get() as? View ?: continue
+            val role = Role.entries.firstOrNull { it.name == pair.getOrNull(1) } ?: continue
+            watch(view, role)
+        }
+    }
+
+    fun close() {
+        retired = true
+        main.removeCallbacksAndMessages(null)
+        for ((view, binding) in views.toList()) {
+            view.removeOnAttachStateChangeListener(binding)
+            binding.onViewDetachedFromWindow(view)
+        }
+        views.clear()
+        for ((view, binding) in optionScreens.toList()) {
+            view.removeOnAttachStateChangeListener(binding)
+            binding.onViewDetachedFromWindow(view)
+        }
+        optionScreens.clear()
+        for ((view, watch) in pageActions.toList()) {
+            view.removeOnLayoutChangeListener(watch.layout)
+            watch.preDraw.removeListener()
+        }
+        pageActions.clear()
+        tips?.close()
+    }
+
     fun refresh() {
         tips?.refresh()
         views.values.toList().forEach(Binding::refresh)
@@ -667,6 +718,7 @@ internal class GlassLauncherControls(
     }
 
     private fun watch(view: View, role: Role) {
+        if (retired) return
         if (!main.looper.isCurrentThread) {
             main.post { safely { watch(view, role) } }
             return
@@ -707,7 +759,7 @@ internal class GlassLauncherControls(
         }
     }
 
-    private inner class Binding(view: View, private val role: Role) :
+    private inner class Binding(view: View, val role: Role) :
         View.OnAttachStateChangeListener, View.OnLayoutChangeListener,
         ViewTreeObserver.OnGlobalFocusChangeListener {
         private val view = WeakReference(view)
@@ -721,14 +773,18 @@ internal class GlassLauncherControls(
         private var appliedAlpha: Int? = null
         private var titleAdjustment: TitleAdjustment? = null
         private var menuLabels: WeakHashMap<TextView, Int>? = null
+        private var firstDraw: OneShotPreDrawListener? = null
 
         override fun onViewAttachedToWindow(view: View) {
             view.addOnLayoutChangeListener(this)
             if (role == Role.MENU_TITLE) view.viewTreeObserver.addOnGlobalFocusChangeListener(this)
-            OneShotPreDrawListener.add(view, ::refresh)
+            firstDraw?.removeListener()
+            firstDraw = OneShotPreDrawListener.add(view, ::refresh)
         }
 
         override fun onViewDetachedFromWindow(view: View) {
+            firstDraw?.removeListener()
+            firstDraw = null
             view.removeOnLayoutChangeListener(this)
             if (role == Role.MENU_TITLE) {
                 view.viewTreeObserver.removeOnGlobalFocusChangeListener(this)

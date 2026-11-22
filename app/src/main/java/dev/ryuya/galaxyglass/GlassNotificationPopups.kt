@@ -66,6 +66,14 @@ internal class GlassNotificationPopups(
         if (detailed.isEmpty()) detailedBackdrop.clear()
     }
 
+    fun idleForHotReload(): Boolean = shownBrief?.view?.get()?.isShown != true && detailed.isEmpty()
+
+    fun close() {
+        shownBrief = null
+        clearBrief()
+        for (view in detailed.keys.toList()) releaseDetailed(view)
+    }
+
     fun refresh() {
         if (briefOnly) {
             if (enabled()) {

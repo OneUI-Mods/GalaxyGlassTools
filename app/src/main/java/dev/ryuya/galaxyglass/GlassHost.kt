@@ -37,10 +37,12 @@ internal class GlassHost(
     private val material = GlassMaterial(app.resources.displayMetrics.density)
     private val keyguard = app.getSystemService(KeyguardManager::class.java)
     private val power = app.getSystemService(PowerManager::class.java)
-    private var appearance = GlassAppearance()
+    @Volatile private var appearance = GlassAppearance()
     private var nightMode = app.resources.configuration.isNightModeActive
     private var homeActivity = WeakReference(activity)
     @Volatile private var unlocked = false
+    @Volatile private var screenInteractive = false
+    private var screenEventGeneration = 0
     private var quick: GlassQuickTiles? = null
     private var cards: GlassNotificationCards? = null
     private var popups: GlassNotificationPopups? = null
@@ -52,15 +54,23 @@ internal class GlassHost(
     private var lockScreenState: GlassLockScreenState? = null
     private var dock: GlassHomeSurfaces? = null
     private var edgeSettings: GlassLauncherControls? = null
+    private val cleanup = ArrayList<() -> Unit>()
+    private var configured = false
+    private var configurationAttempts = 0
+    private var onReady: (() -> Unit)? = null
+    private var reconnectHomeControls: Any? = null
+    private var reconnectQuickDraws: Any? = null
+    private var retired = false
     private var shadeTouchInstalled = false
     private var drawScheduled = false
+    private val shadeFrame = Choreographer.FrameCallback {
+        drawScheduled = false
+        if (!retired && Build.VERSION.SDK_INT >= 33) refreshPanelSurfaces()
+    }
     private val shadeLight = GlassTouchLight {
-        if (!drawScheduled) {
+        if (!drawScheduled && !retired) {
             drawScheduled = true
-            Choreographer.getInstance().postFrameCallback {
-                drawScheduled = false
-                if (Build.VERSION.SDK_INT >= 33) refreshPanelSurfaces()
-            }
+            Choreographer.getInstance().postFrameCallback(shadeFrame)
         }
     }
     private val unavailable = mutableSetOf<String>()
@@ -68,7 +78,36 @@ internal class GlassHost(
     private val reported = mutableMapOf<String, String>()
     private val surfaceStages = mutableMapOf<String, GlassSurfaceStage>()
 
-    fun start() {
+    fun idleForHotReload(): Boolean = configured && !retired &&
+        worker.activeCount == 0 && worker.queue.isEmpty() && popups?.idleForHotReload() != false &&
+        dock?.idleForHotReload() != false && volume?.idleForHotReload() != false && !drawScheduled
+
+    @RequiresApi(33)
+    fun stateForReload(): Array<Any?> = arrayOf(systemSurfaces?.stateForReload(),
+        edgeSettings?.stateForReload(), homeActivity, dock?.stateForReload(),
+        quick?.stateForReload(), volumePlugin?.stateForReload(), appearance.stateForReload())
+
+    @RequiresApi(33)
+    fun close() {
+        retired = true
+        onReady = null
+        main.removeCallbacksAndMessages(null)
+        if (drawScheduled) Choreographer.getInstance().removeFrameCallback(shadeFrame)
+        shadeLight.clear()
+        val retire = listOf<() -> Unit>(
+            { popups?.close() }, { systemSurfaces?.close() }, { edgeSettings?.close() }, { dock?.close() },
+            { cards?.close() }, { quick?.close() }, { volume?.close() }, { volumePlugin?.close() },
+            { lockScreenState?.close() }, { panelBackdrop?.clear() },
+        ) + cleanup.asReversed()
+        for (action in retire) {
+            runCatching(action).onFailure { HookEntry.log("GLASS_HELPER_RETIRE ${it.javaClass.simpleName}") }
+        }
+        cleanup.clear()
+        worker.shutdownNow()
+    }
+
+    fun start(previous: Array<*>? = null, ready: (() -> Unit)? = null) {
+        onReady = ready
         if (Build.VERSION.SDK_INT < 33 || !GlassTargets.supportsSystemGlass()) return
         if (homeEdgeOnly) {
             edgeSettings = GlassLauncherControls(app, loader, {
@@ -76,18 +115,26 @@ internal class GlassHost(
             }, ::isNight, material, {}, ::reportSurface, edgeSettingsOnly = true)
         }
         if (briefOnly) popups = createPopups()
+        edgeSettings?.reconnect(previous?.getOrNull(1))
+        val previousHome = (previous?.getOrNull(2) as? WeakReference<*>)?.get() as? Activity
+        if (previousHome?.isDestroyed == false) homeActivity = WeakReference(previousHome)
+        reconnectHomeControls = previous?.getOrNull(3)
+        reconnectQuickDraws = previous?.getOrNull(4)
         if (systemUi && !briefOnly && !systemSurfacesOnly) {
             volumePlugin = runCatching { VolumePluginDiscovery(loader) }
                 .onFailure { HookEntry.log("GLASS_VOLUME_PLUGIN_UNAVAILABLE ${it.javaClass.simpleName}") }.getOrNull()
+            volumePlugin?.reconnect(previous?.getOrNull(5))
         }
         if (systemUi && !briefOnly && Looper.myLooper() == main.looper) {
             // Catch the first inflation even when the appearance settings are still loading.
             prepareSystemHelper()
         }
         main.post {
+            if (retired) return@post
             if (systemUi && !briefOnly) prepareSystemHelper()
+            systemSurfaces?.reconnect(previous?.getOrNull(0))
             nightMode = app.resources.configuration.isNightModeActive
-            app.registerComponentCallbacks(object : ComponentCallbacks {
+            val component = object : ComponentCallbacks {
                 override fun onConfigurationChanged(configuration: Configuration) {
                     val night = configuration.isNightModeActive
                     if (nightMode == night) return
@@ -96,7 +143,9 @@ internal class GlassHost(
                 }
 
                 override fun onLowMemory() = Unit
-            })
+            }
+            app.registerComponentCallbacks(component)
+            cleanup += { app.unregisterComponentCallbacks(component) }
             unlocked = keyguard?.isKeyguardLocked == false
             if (systemUi) {
                 if (!briefOnly && !systemSurfacesOnly) {
@@ -110,22 +159,30 @@ internal class GlassHost(
             }
             else if (Build.VERSION.SDK_INT >= 33 && !homeEdgeOnly) trackHomeActivity()
             val uri = requireNotNull(ConfigProvider.URI)
-            app.contentResolver.registerContentObserver(uri, false, object : ContentObserver(main) {
+            val settings = object : ContentObserver(main) {
                 override fun onChange(selfChange: Boolean) = read()
-            })
+            }
+            app.contentResolver.registerContentObserver(uri, false, settings)
+            cleanup += { app.contentResolver.unregisterContentObserver(settings) }
+            val previousAppearance = previous?.getOrNull(6) as? Bundle
+            if (previousAppearance != null && Build.VERSION.SDK_INT >= 33) {
+                refreshPopupUnlock()
+                apply(GlassAppearance.read(previousAppearance))
+            }
             read()
         }
     }
 
     private fun trackKeyguard() {
-        app.registerReceiver(object : BroadcastReceiver() {
+        val screen = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                screenEventGeneration++
+                setScreenInteractive(intent.action != Intent.ACTION_SCREEN_OFF)
                 unlocked = when (intent.action) {
                     Intent.ACTION_SCREEN_OFF -> false
                     Intent.ACTION_USER_PRESENT -> true
                     else -> keyguard?.isKeyguardLocked == false
                 }
-                lockScreenState?.setInteractive(intent.action != Intent.ACTION_SCREEN_OFF)
                 if (!unlocked) {
                     shadeLight.clear()
                     if (Build.VERSION.SDK_INT >= 33) panelBackdrop?.clear()
@@ -138,11 +195,29 @@ internal class GlassHost(
                 }
                 notificationShade?.refresh()
             }
-        }, IntentFilter().apply {
+        }
+        app.registerReceiver(screen, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         }, Context.RECEIVER_NOT_EXPORTED)
+        cleanup += { app.unregisterReceiver(screen) }
+        val generation = screenEventGeneration
+        worker.execute {
+            // A running SystemUI can be loaded with the screen already on.
+            val initial = runCatching { power?.isInteractive == true }.getOrDefault(false)
+            main.post {
+                if (generation == screenEventGeneration) {
+                    setScreenInteractive(initial)
+                    if (Build.VERSION.SDK_INT >= 33) systemSurfaces?.refresh()
+                }
+            }
+        }
+    }
+
+    private fun setScreenInteractive(interactive: Boolean) {
+        screenInteractive = interactive
+        lockScreenState?.setInteractive(interactive)
     }
 
     private fun refreshLockScreen() {
@@ -155,7 +230,7 @@ internal class GlassHost(
 
     @RequiresApi(33)
     private fun trackHomeActivity() {
-        app.registerReceiver(object : BroadcastReceiver() {
+        val screen = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.action) {
                     Intent.ACTION_SCREEN_OFF -> dock?.clearDockBackdrops()
@@ -163,12 +238,14 @@ internal class GlassHost(
                     Intent.ACTION_WALLPAPER_CHANGED -> dock?.wallpaperChanged()
                 }
             }
-        }, IntentFilter().apply {
+        }
+        app.registerReceiver(screen, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
             addAction(Intent.ACTION_WALLPAPER_CHANGED)
         }, Context.RECEIVER_NOT_EXPORTED)
-        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+        cleanup += { app.unregisterReceiver(screen) }
+        val lifecycle = object : Application.ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
             override fun onActivityStarted(activity: Activity) = Unit
             override fun onActivityResumed(activity: Activity) {
@@ -185,28 +262,30 @@ internal class GlassHost(
             override fun onActivityDestroyed(activity: Activity) {
                 if (homeActivity.get() === activity) homeActivity.clear()
             }
-        })
+        }
+        app.registerActivityLifecycleCallbacks(lifecycle)
+        cleanup += { app.unregisterActivityLifecycleCallbacks(lifecycle) }
     }
 
     private fun read() {
+        if (retired) return
         worker.execute {
-            val next = runCatching {
-                val config = app.contentResolver.call(ConfigProvider.URI, "config", null, null)
-                    ?: return@runCatching GlassAppearance()
-                GlassAppearance(
-                    quick = config.getBoolean(GlassAppearance.QUICK),
-                    notifications = config.getBoolean(GlassAppearance.NOTIFICATIONS),
-                    home = config.getBoolean(GlassAppearance.HOME),
-                    strength = config.getInt(GlassAppearance.STRENGTH),
-                    tint = config.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT),
-                    volume = config.getBoolean(GlassAppearance.VOLUME),
-                    volumeTheme = config.getInt("volume"),
-                    systemSurfaces = config.getBoolean(GlassAppearance.SYSTEM_SURFACES),
-                    lockScreen = config.getBoolean(GlassAppearance.LOCK_SCREEN),
-                )
-            }.getOrNull() ?: GlassAppearance()
+            val config = runCatching {
+                app.contentResolver.call(ConfigProvider.URI, "config", null, null)
+            }.getOrNull()
+            val next = config?.let(GlassAppearance::read)
             main.post {
-                if (Build.VERSION.SDK_INT >= 33) apply(next)
+                if (!retired && Build.VERSION.SDK_INT >= 33 && next != null) {
+                    configurationAttempts = 0
+                    apply(next)
+                    if (!configured) {
+                        configured = true
+                        onReady?.invoke()
+                        onReady = null
+                    }
+                } else if (!retired && !configured && configurationAttempts < 5) {
+                    main.postDelayed(::read, 250L shl configurationAttempts++)
+                }
             }
         }
     }
@@ -264,6 +343,8 @@ internal class GlassHost(
                 dock = GlassHomeSurfaces(app, loader, main, worker, { if (appearance.home) appearance.strength else 0 },
                     ::isNight, material, { markDrawn(GlassAppearance.HOME) }, ::reportSurface)
                 homeActivity.get()?.takeUnless(Activity::isDestroyed)?.let { dock?.find(it.window.decorView) }
+                dock?.reconnect(reconnectHomeControls)
+                reconnectHomeControls = null
             }
         }
         if (changed) refreshSurfaces()
@@ -299,9 +380,9 @@ internal class GlassHost(
     @RequiresApi(33)
     private fun installSystemSurfaces() {
         systemSurfaces = GlassSystemSurfaces(
-            app, main, { if (appearance.systemSurfaces) appearance.strength else 0 },
+            app, loader, main, { if (appearance.systemSurfaces) appearance.strength else 0 },
             { if (appearance.lockScreen) appearance.strength else 0 }, ::lockScreenVisible,
-            { unlocked }, ::refreshPopupUnlock, { power?.isInteractive == true }, material,
+            { unlocked }, ::refreshPopupUnlock, { screenInteractive }, material,
             { panelBackdrop }, !systemSurfacesOnly,
             { quick?.refresh() },
             { markDrawn(GlassAppearance.SYSTEM_SURFACES) },
@@ -318,7 +399,8 @@ internal class GlassHost(
             ::isNight, { unlocked }, { shadeLight.pointer }, material, app.resources.displayMetrics.density,
             { panelBackdrop }, { markDrawn(GlassAppearance.QUICK) },
             { markDrawn(GlassAppearance.SYSTEM_SURFACES) },
-            { markDrawn(GlassAppearance.VOLUME) }, ::reportSurface)
+            { markDrawn(GlassAppearance.VOLUME) }, ::reportSurface, reconnectQuickDraws)
+        reconnectQuickDraws = null
     }
 
     @RequiresApi(33)

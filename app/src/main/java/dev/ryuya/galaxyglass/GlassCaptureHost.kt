@@ -12,24 +12,47 @@ internal class GlassCaptureHost(private val app: Application, private val loader
     private val main = Handler(Looper.getMainLooper())
     private val worker = BackgroundExecutors.serial("GlassCaptureConfig")
     private val runtime = GlassCaptureRuntime(app, worker)
+    private val toolbar = CaptureToolbarGlass(runtime)
+    private val dialogs = RecordingStartGlass(runtime)
+    private var observer: ContentObserver? = null
+    @Volatile private var retired = false
 
-    fun start() {
-        CaptureToolbarGlass.install(runtime, loader)
-        val glass = RecordingStartGlass(runtime)
+    fun readyForHotReload() =
+        dialogs.readyForHotReload() && worker.activeCount == 0 && worker.queue.isEmpty()
+
+    fun exportState() = toolbar.exportState()
+
+    fun close() {
+        retired = true
+        main.removeCallbacksAndMessages(null)
+        observer?.let { runCatching { app.contentResolver.unregisterContentObserver(it) } }
+        observer = null
+        dialogs.close()
+        toolbar.close()
+        worker.shutdownNow()
+    }
+
+    fun start(state: Any? = null) {
+        toolbar.install(loader)
+        toolbar.importState(state)
         if (Application.getProcessName() == "${GlassTargets.CAPTURE}:screenrecorder" ||
-            Application.getProcessName() == GlassTargets.CAPTURE) installDialogs(glass)
-        app.contentResolver.registerContentObserver(ConfigProvider.URI, false, object : ContentObserver(main) {
+            Application.getProcessName() == GlassTargets.CAPTURE) installDialogs(dialogs)
+        val config = object : ContentObserver(main) {
             override fun onChange(selfChange: Boolean) = read()
-        })
+        }
+        app.contentResolver.registerContentObserver(ConfigProvider.URI, false, config)
+        observer = config
         read()
     }
 
     private fun read() {
+        if (retired) return
         worker.execute {
             val config = runCatching {
                 app.contentResolver.call(ConfigProvider.URI, "config", null, null)
             }.getOrNull()
             main.post {
+                if (retired) return@post
                 runtime.update(config?.getBoolean(GlassTargets.CAPTURE_SETTING) == true,
                     config?.getInt(GlassAppearance.STRENGTH, GlassAppearance.DEFAULT_STRENGTH) ?: 0,
                     config?.getInt(GlassAppearance.TINT, GlassAppearance.DEFAULT_TINT) ?: GlassAppearance.DEFAULT_TINT)

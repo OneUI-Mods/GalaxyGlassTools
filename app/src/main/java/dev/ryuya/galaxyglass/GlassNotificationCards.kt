@@ -203,6 +203,15 @@ internal class GlassNotificationCards(
         }
     }
 
+    fun close() {
+        softened.keys.toList().forEach(::restore)
+        for (view in seen.keys.toList()) {
+            view.invalidate()
+            (view.parent as? View)?.invalidate()
+        }
+        seen.clear()
+    }
+
     fun backdropChanged() {
         // The live texture is drawn by the row, above its separate background display list.
         for (background in seen.keys) {

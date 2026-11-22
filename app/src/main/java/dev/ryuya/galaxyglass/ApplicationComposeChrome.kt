@@ -4,7 +4,7 @@ import android.graphics.Canvas
 import android.view.View
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier as JvmModifier
-import java.lang.reflect.Proxy
+import java.lang.reflect.InvocationHandler
 import java.util.WeakHashMap
 
 /** Applies glass to identified Material 2 and 3 chrome and floating panels. */
@@ -13,12 +13,14 @@ internal class ApplicationComposeChrome(
     installed: MutableSet<Method>,
     private val strength: (View) -> Int,
     private val paint: (View, Canvas, Float, Float, Surface, Int) -> Unit,
+    previous: Any? = null,
 ) {
     enum class Surface(val radius: Int, val panel: Boolean = false) {
         BAR(0), SEARCH(24), MENU(12, true), SHEET(24, true), DRAWER(20, true),
     }
 
     private val nodes = WeakHashMap<Any, Unit>()
+    private val callbacks = GlassComposeCallbacks()
     private val invalidate: Method
 
     init {
@@ -112,9 +114,8 @@ internal class ApplicationComposeChrome(
         invalidate = type("androidx.compose.ui.node.DrawModifierNodeKt").getMethod("invalidateDraw", node.type)
         val unit = runCatching { type("kotlin.Unit").getField("INSTANCE").get(null) }.getOrNull()
 
-        val overlays = mutableMapOf<Surface, Any>()
-        fun overlayFor(surface: Surface): Any = overlays.getOrPut(surface) {
-            val callback = Proxy.newProxyInstance(function.classLoader, arrayOf(function)) { proxy, called, args ->
+        fun drawOverlay(surface: Surface): InvocationHandler =
+            InvocationHandler { proxy, called, args ->
                 when (called.name) {
                     invoke.name -> {
                         val native = requireNotNull(args?.firstOrNull())
@@ -142,6 +143,13 @@ internal class ApplicationComposeChrome(
                     else -> null
                 }
             }
+        callbacks.reconnect(previous, drawContent, unit) { descriptor ->
+            Surface.entries.firstOrNull { it.name == descriptor.firstOrNull() }?.let(::drawOverlay)
+        }
+        val overlays = mutableMapOf<Surface, Any>()
+        fun overlayFor(surface: Surface): Any = overlays.getOrPut(surface) {
+            val callback = callbacks.create(arrayOf(surface.name), function, drawContent,
+                invoke, unit, drawOverlay(surface))
             requireNotNull(draw.invoke(null, empty, callback))
         }
         val composing = ThreadLocal<MutableSet<Surface>>()
@@ -206,6 +214,13 @@ internal class ApplicationComposeChrome(
             }.onSuccess { installed.add(method) }
                 .onFailure { HookEntry.log("GLASS_APP_COMPOSE_METHOD_UNAVAILABLE ${method.name}") }
         }
+    }
+
+    fun stateForReload() = callbacks.stateForReload()
+
+    fun close() {
+        callbacks.detach()
+        refresh()
     }
 
     fun refresh() {

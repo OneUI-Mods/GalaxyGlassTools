@@ -57,6 +57,19 @@ internal class GlassHomeSurfaces(
         if (root is ViewGroup) for (index in 0 until root.childCount) scan(root.getChildAt(index))
     }
 
+    fun idleForHotReload() = folderIcons?.idleForHotReload() != false &&
+        folderBackdrop?.idleForHotReload() != false
+
+    fun stateForReload() = controls.stateForReload()
+
+    fun reconnect(saved: Any?) = controls.reconnect(saved)
+
+    fun close() {
+        for (retire in listOf<() -> Unit>(dock::close, { folderBackdrop?.close() }, controls::close)) {
+            runCatching(retire).onFailure { HookEntry.log("GLASS_HOME_RETIRE ${it.javaClass.simpleName}") }
+        }
+    }
+
     fun refresh() {
         dock.refresh()
         folderIcons?.refresh()

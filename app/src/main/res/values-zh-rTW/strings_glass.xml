@@ -53,4 +53,5 @@
     <string name="glass_settings_other_system_apps">其他系統應用程式</string>
     <string name="glass_settings_master_off_notice">玻璃效果的總開關已關閉。</string>
     <string name="glass_settings_preview_only">此裝置僅支援預覽。</string>
+    <string name="glass_pip_playback_position">播放位置</string>
 </resources>

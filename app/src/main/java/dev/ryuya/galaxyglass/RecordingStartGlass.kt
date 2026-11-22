@@ -32,6 +32,13 @@ internal class RecordingStartGlass(private val runtime: GlassCaptureRuntime) {
     private var active: Session? = null
     private var reportedFailure = false
 
+    fun readyForHotReload() = active == null
+
+    fun close() {
+        main.removeCallbacksAndMessages(null)
+        active?.close()
+    }
+
     fun attach(dialog: Dialog, captureBackdrop: Boolean = true) {
         val window = dialog.window ?: return
         val resources = window.context.resources

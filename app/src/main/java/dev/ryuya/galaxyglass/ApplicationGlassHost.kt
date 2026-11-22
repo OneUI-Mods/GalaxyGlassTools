@@ -28,6 +28,7 @@ import android.inputmethodservice.InputMethodService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.InputType
@@ -84,13 +85,17 @@ internal class ApplicationGlassHost(
     private var resumed = WeakReference<Activity>(null)
     private var hasDrawn = false
     private var failureLogged = false
-    private val composeRenderers = mutableListOf<ApplicationComposeChrome>()
+    private val composeRenderers = LinkedHashMap<ClassLoader, ApplicationComposeChrome>()
     private val composeLoaders = mutableSetOf<ClassLoader>()
     private val composeMethods = mutableSetOf<java.lang.reflect.Method>()
     private val composeCorners = FloatArray(8)
     private var inputMethod = WeakReference<InputMethodService>(null)
     private var guardStarted = false
     private var blocked = false
+    private var healthyDeadline = 0L
+    private var transparencyObserver: ContentObserver? = null
+    private var screenReceiver: BroadcastReceiver? = null
+    private var retired = false
     private val readListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         main.removeCallbacks(readSettings)
         main.post(readSettings)
@@ -104,38 +109,117 @@ internal class ApplicationGlassHost(
         }
     }
 
-    fun start(firstActivity: Activity?) {
+    fun canRetire(): Boolean = inputMethod.get()?.isInputViewShown != true &&
+        views.values.none { it.isOpenUninstallPrompt() }
+
+    fun stateForReload(): Array<Any?> = arrayOf(
+        resumed,
+        inputMethod,
+        composeRenderers.map { (loader, renderer) -> arrayOf(loader, renderer.stateForReload()) }.toTypedArray(),
+        views.values.map(WindowBinding::stateForReload).toTypedArray(),
+        guardStarted,
+        blocked,
+        healthyDeadline,
+        inflatedPlates.map { (view, radius) -> arrayOf(WeakReference(view), radius) }.toTypedArray(),
+    )
+
+    fun close() {
+        retired = true
+        main.removeCallbacksAndMessages(null)
+        val cleanup = listOf<() -> Unit>(
+            { prefs.unregisterOnSharedPreferenceChangeListener(readListener) },
+            { app.unregisterActivityLifecycleCallbacks(this) },
+            { transparencyObserver?.let { app.contentResolver.unregisterContentObserver(it) } },
+            { screenReceiver?.let(app::unregisterReceiver) },
+        ) + composeRenderers.values.map { it::close }
+        for (action in cleanup) runCatching(action).onFailure {
+            HookEntry.log("GLASS_APP_RETIRE ${app.packageName} ${it.javaClass.simpleName}")
+        }
+        for (binding in views.values.toList()) runCatching(binding::stop).onFailure {
+            HookEntry.log("GLASS_APP_WINDOW_RETIRE ${it.javaClass.simpleName}")
+        }
+        views.clear()
+    }
+
+    fun start(firstActivity: Activity?, previous: Array<*>? = null) {
         installWindowHooks()
         if (app.packageName == ApplicationGlassTargets.PACKAGE_INSTALLER) installUninstallPromptHook()
         installLayoutPlates()
         if (inputMethodPlateNames.isNotEmpty()) installInputMethodHooks()
+        for (item in (previous?.getOrNull(2) as? Array<*>).orEmpty()) {
+            val pair = item as? Array<*> ?: continue
+            val loader = pair.firstOrNull() as? ClassLoader ?: continue
+            prepareCompose(loader, pair.getOrNull(1))
+        }
         prepareCompose(firstActivity?.classLoader ?: app.classLoader)
         app.registerActivityLifecycleCallbacks(this)
         resumed = WeakReference(firstActivity)
         prefs.registerOnSharedPreferenceChangeListener(readListener)
-        app.contentResolver.registerContentObserver(
-            Settings.System.getUriFor(REDUCE_TRANSPARENCY), false,
-            object : ContentObserver(main) {
-                override fun onChange(selfChange: Boolean) {
-                    reduced = reduceTransparency()
-                    updateWindows()
-                }
-            },
-        )
-        app.registerReceiver(object : BroadcastReceiver() {
+        val transparency = object : ContentObserver(main) {
+            override fun onChange(selfChange: Boolean) {
+                if (retired) return
+                reduced = reduceTransparency()
+                updateWindows()
+            }
+        }
+        app.contentResolver.registerContentObserver(Settings.System.getUriFor(REDUCE_TRANSPARENCY), false, transparency)
+        transparencyObserver = transparency
+        val screen = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                if (retired) return
                 if (intent.action == Intent.ACTION_SCREEN_OFF) {
                     interactive = false
                     views.values.toList().forEach { it.restore() }
-                    composeRenderers.forEach(ApplicationComposeChrome::refresh)
+                    composeRenderers.values.forEach(ApplicationComposeChrome::refresh)
                 } else updateWindows()
             }
-        }, IntentFilter().apply {
+        }
+        app.registerReceiver(screen, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
         }, Context.RECEIVER_NOT_EXPORTED)
+        screenReceiver = screen
+        if (previous != null) restore(previous)
         if (firstActivity?.window?.peekDecorView()?.isAttachedToWindow == true) onActivityPostResumed(firstActivity)
         HookEntry.log("GLASS_APP_READY ${app.packageName} process=$process build=${BuildConfig.VERSION_CODE}")
+    }
+
+    private fun restore(saved: Array<*>) {
+        guardStarted = saved.getOrNull(4) == true
+        blocked = saved.getOrNull(5) == true
+        val deadline = saved.getOrNull(6) as? Long ?: 0L
+        if (guardStarted && !blocked && deadline > 0L) {
+            val guard = CrashGuard.resumeApplicationGlass(app, process)
+            blocked = guard.blocked()
+            if (!blocked) scheduleHealthy(guard, deadline)
+        }
+        for (item in (saved.getOrNull(7) as? Array<*>).orEmpty()) {
+            val values = item as? Array<*> ?: continue
+            val view = (values.getOrNull(0) as? WeakReference<*>)?.get() as? View ?: continue
+            val radius = values.getOrNull(1) as? Int ?: continue
+            inflatedPlates[view] = radius
+        }
+        val input = (saved.getOrNull(1) as? WeakReference<*>)?.get() as? InputMethodService
+        if (input != null) bindInputMethod(input)
+        for (item in (saved.getOrNull(3) as? Array<*>).orEmpty()) {
+            val window = item as? Array<*> ?: continue
+            fun reference(index: Int) = (window.getOrNull(index) as? WeakReference<*>)?.get()
+            val root = reference(0) as? View ?: continue
+            val owner = reference(1) as? Activity
+            val native = reference(2) as? Window
+            val panel = reference(3) as? View
+            if (root.isAttachedToWindow) {
+                observe(root, owner, native, panel, window.getOrNull(4) == true, window.getOrNull(5) == true)
+            }
+        }
+    }
+
+    private fun scheduleHealthy(guard: CrashGuard, deadline: Long) {
+        healthyDeadline = deadline
+        main.postAtTime({
+            healthyDeadline = 0L
+            guard.healthy()
+        }, deadline)
     }
 
     private fun resolvePlates(names: Map<String, Int>, type: String = "id"): Map<Int, Int> =
@@ -170,11 +254,16 @@ internal class ApplicationGlassHost(
         }.onFailure { HookEntry.log("GLASS_APP_LAYOUT_UNAVAILABLE ${app.packageName} ${it.javaClass.simpleName}") }
     }
 
-    private fun prepareCompose(loader: ClassLoader) {
-        if (!composeLoaders.add(loader)) return
-        runCatching {
-            ApplicationComposeChrome(loader, composeMethods, ::composeStrength, ::drawCompose)
-        }.getOrNull()?.let(composeRenderers::add)
+    private fun prepareCompose(loader: ClassLoader, previous: Any? = null) {
+        if (retired || !composeLoaders.add(loader)) return
+        val renderer = runCatching {
+            ApplicationComposeChrome(loader, composeMethods, ::composeStrength, ::drawCompose, previous)
+        }.getOrElse { error ->
+            // Absence of Compose on a stock View app is normal. Failed restoration is reported.
+            if (previous != null) throw error
+            return
+        }
+        composeRenderers[loader] = renderer
     }
 
     fun bindInputMethod(service: InputMethodService) {
@@ -328,7 +417,7 @@ internal class ApplicationGlassHost(
         root: View, owner: Activity?, window: Window?, panel: View?, ime: Boolean = false,
         uninstallPrompt: Boolean = false,
     ) {
-        if (!uninstallPrompt && owner?.javaClass?.name?.let(::sensitive) == true) return
+        if (retired || (!uninstallPrompt && owner?.javaClass?.name?.let(::sensitive) == true)) return
         if (views.containsKey(root)) return
         val binding = WindowBinding(root, owner, window, panel, ime, uninstallPrompt)
         views[root] = binding
@@ -344,7 +433,7 @@ internal class ApplicationGlassHost(
     private fun updateWindows() = safely {
         updateInteractive()
         views.values.toList().forEach { it.refresh() }
-        composeRenderers.forEach(ApplicationComposeChrome::refresh)
+        composeRenderers.values.forEach(ApplicationComposeChrome::refresh)
     }
 
     private fun composeStrength(view: View): Int {
@@ -381,7 +470,7 @@ internal class ApplicationGlassHost(
             }
             blocked = guard.blocked()
             if (blocked) HookEntry.log("GLASS_APP_CRASH_GUARD ${app.packageName} process=$process")
-            else main.postDelayed({ guard.healthy() }, 90_000L)
+            else scheduleHealthy(guard, SystemClock.uptimeMillis() + 90_000L)
         }
         return !blocked
     }
@@ -448,6 +537,7 @@ internal class ApplicationGlassHost(
     }
 
     private fun safely(action: () -> Unit) {
+        if (retired) return
         try {
             action()
         } catch (error: Exception) {
@@ -704,6 +794,10 @@ internal class ApplicationGlassHost(
             plates.entries.toList().forEach { (view, plate) -> unbind(view, plate) }
             root.get()?.let(::removeSystemBars)
         }
+
+        fun isOpenUninstallPrompt() = uninstallPrompt && root.get()?.isShown == true
+
+        fun stateForReload(): Array<Any> = arrayOf(root, owner, window, panel, ime, uninstallPrompt)
 
         fun stop() {
             observer?.takeIf(ViewTreeObserver::isAlive)?.removeOnGlobalLayoutListener(this)
