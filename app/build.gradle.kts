@@ -25,8 +25,8 @@ android {
         applicationId = "dev.ryuya.galaxyglass"
         minSdk = 33
         targetSdk = 37
-        versionCode = 53
-        versionName = "0.4.32"
+        versionCode = 62
+        versionName = "0.4.38"
     }
     signingConfigs {
         if (!distributionProperties.isEmpty)

@@ -62,6 +62,9 @@ internal class GlassSystemSurfaces(
     private var tips: GlassSamsungTips? = null
     private var transparency: ContentObserver? = null
     @Volatile private var retired = false
+    private val pipControls = if (canUseShadeBackdrop) runCatching { GlassPipControls() }
+        .onFailure { HookEntry.log("GLASS_PIP_FEEDBACK_UNAVAILABLE ${it.javaClass.simpleName}") }.getOrNull()
+        else null
     private val pipSeekInput = if (canUseShadeBackdrop) GlassPipSeekInput(loader) else null
     private val hiddenPipMenu = if (canUseShadeBackdrop) runCatching { HiddenPipMenuSurface(loader) }
         .onFailure { HookEntry.log("GLASS_PIP_EMPTY_MENU_UNAVAILABLE ${it.javaClass.simpleName}") }
@@ -463,7 +466,8 @@ internal class GlassSystemSurfaces(
         private val hasPipButtons = spec.targets.any { it.pipButton }
         private val isPipMenu = spec.name == "pip_menu" || spec.name == "sem_pip_menu"
         private var pipProgress: GlassPipProgress? = null
-        private var triedPipProgress = false
+        // Shell can show the menu before its controller and container are ready. Retry on later frames.
+        private var pipProgressAttempts = 0
         private var checkedPipUnlock = false
 
         override fun onViewAttachedToWindow(view: View) {
@@ -490,7 +494,7 @@ internal class GlassSystemSurfaces(
             panelStrength = -1
             pipProgress?.close()
             pipProgress = null
-            triedPipProgress = false
+            pipProgressAttempts = 0
             checkedPipUnlock = false
             restore()
         }
@@ -499,11 +503,17 @@ internal class GlassSystemSurfaces(
             if (spec.name in EXISTING_PANEL_PLATES) onGlobalLayout()
             if (isPipMenu && !retired) {
                 val root = view.get()
-                if (!triedPipProgress && root != null && visibleStrength(root) > 0) {
-                    triedPipProgress = true
+                if (pipProgress == null && pipProgressAttempts < MAX_PIP_PROGRESS_ATTEMPTS && root != null &&
+                    visibleStrength(root) > 0
+                ) {
+                    pipProgressAttempts++
                     pipProgress = GlassPipProgress.attach(root, pipSeekInput) { !retired && visibleStrength(root) > 0 }
+                    if (pipProgress == null && pipProgressAttempts == MAX_PIP_PROGRESS_ATTEMPTS) {
+                        HookEntry.log("GLASS_PIP_PROGRESS_NOT_ATTACHED")
+                    }
                 }
                 pipProgress?.updateVisibility()
+                effects.keys.forEach { pipControls?.refreshArtwork(it) }
             }
             return true
         }
@@ -619,6 +629,7 @@ internal class GlassSystemSurfaces(
                 }
             }
             if (!effect.update(target, level, corner, keepFill, boundedPlate = corner > 0)) return false
+            if (pipButton) pipControls?.attach(target, effect)
             if (shadeBackdrop && canUseShadeBackdrop && target is ViewGroup) {
                 refracting[target] = Refraction(spec.name, effect, spec.name in MEDIA_LAYOUTS)
             }
@@ -634,6 +645,7 @@ internal class GlassSystemSurfaces(
         }
 
         private fun release(target: View) {
+            pipControls?.detach(target)
             effects.remove(target)?.restore(target)
             if (target !== view.get()) target.removeOnLayoutChangeListener(this)
             if (target is ViewGroup) refracting.remove(target)
@@ -682,6 +694,7 @@ internal class GlassSystemSurfaces(
     }
 
     private companion object {
+        const val MAX_PIP_PROGRESS_ATTEMPTS = 30
         const val REDUCE_TRANSPARENCY = "accessibility_reduce_transparency"
         const val SHADE_ROOT = "com.android.systemui.shade.NotificationShadeWindowView"
         const val SHADE_FOOTER = "com.android.systemui.statusbar.notification.footer.ui.view.FooterView"

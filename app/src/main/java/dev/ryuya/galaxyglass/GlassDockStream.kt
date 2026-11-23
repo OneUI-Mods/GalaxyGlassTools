@@ -61,6 +61,8 @@ internal class GlassDockStream(
     private val resourceDelivery = Handler(main.looper)
     private var session: Session? = null
     private var failed = false
+    // Failures in a row without a drawn frame. A transient failure is retried on the next visit to Home.
+    private var failures = 0
     private var pending: Update? = null
     private var checkingKeyguard = false
     private var accessGeneration = 0L
@@ -173,12 +175,17 @@ internal class GlassDockStream(
             view = view.parent as? View
         }
         active.setSourceVisible(visible)
-        if (visible && host.hasWindowFocus()) active.alignOutput()
+        // Follow the dock while Home animates in; focus arrives only after the transition ends.
+        if (visible) active.alignOutput()
     }
 
     fun close(afterTransition: Boolean = false) {
         accessGeneration++
         pending = null
+        if (afterTransition && failed && failures < MAX_FAILURES) {
+            failed = false
+            changed()
+        }
         releaseSession(afterTransition)
         if (!afterTransition) {
             for (release in windowReleases.toList()) {
@@ -220,7 +227,8 @@ internal class GlassDockStream(
     private fun fail(active: Session, error: Exception) {
         if (session !== active) return
         failed = true
-        HookEntry.log("GLASS_DOCK_STREAM_UNAVAILABLE ${error.javaClass.simpleName} ${error.message}")
+        failures++
+        HookEntry.log("GLASS_DOCK_STREAM_UNAVAILABLE ${error.javaClass.simpleName} ${error.message} failures=$failures")
         close()
     }
 
@@ -255,8 +263,8 @@ internal class GlassDockStream(
             }
         }
         private var thread: HandlerThread? = null
-        private var graphics: Handler? = null
-        private var virtualDisplay: VirtualDisplay? = null
+        @Volatile private var graphics: Handler? = null
+        @Volatile private var virtualDisplay: VirtualDisplay? = null
         private var sourceSurface: Surface? = null
         @Volatile private var sourceVisible = true
         private var presentation: Presentation? = null
@@ -490,7 +498,13 @@ internal class GlassDockStream(
                     .setScale(layer, scaleX, scaleY)
                     .setPosition(layer, -crop.left * scaleX, -crop.top * scaleY)
                     .setVisibility(layer, true)
-                    .apply()
+                // The wallpaper app votes for a lower rate on this private display. Compose its
+                // mirror at the dock's source rate so the glass follows Home at 120 Hz.
+                it.setFrameRate(layer, source.refreshRate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                    Surface.CHANGE_FRAME_RATE_ALWAYS)
+                it.setFrameRate(parent, source.refreshRate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                    Surface.CHANGE_FRAME_RATE_ALWAYS)
+                it.apply()
             }
             attached = true
             HookEntry.log("GLASS_DOCK_STREAM_MIRRORED ${width}x$height at ${virtualDisplay?.display?.refreshRate} Hz")
@@ -507,13 +521,15 @@ internal class GlassDockStream(
         }
 
         private fun present(newFrame: Boolean) {
-            if (closed || !attached) return
+            // A closed session's thread may still drain queued work.
+            if (closed || !attached || graphics?.looper !== android.os.Looper.myLooper()) return
             try {
                 if (renderer.draw(shape, newFrame) && !drewFrame) {
                     drewFrame = true
                     main.post {
                         if (!closed) {
                             ready = true
+                            failures = 0
                             main.removeCallbacks(startTimeout)
                             refractionFade = ValueAnimator.ofFloat(0f, 1f).apply {
                                 duration = 100L
@@ -529,6 +545,8 @@ internal class GlassDockStream(
                     }
                 }
             } catch (error: Exception) {
+                // The output may have been released while this draw was queued.
+                if (closed || graphics?.looper !== android.os.Looper.myLooper()) return
                 main.post { fail(this, error) }
             }
         }
@@ -566,5 +584,6 @@ internal class GlassDockStream(
     private companion object {
         const val WINDOW_RELEASE_DELAY_MS = 350L
         const val SOURCE_TIMEOUT_MS = 2_500L
+        const val MAX_FAILURES = 5
     }
 }

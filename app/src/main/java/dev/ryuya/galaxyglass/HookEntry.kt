@@ -51,16 +51,16 @@ class HookEntry : XposedModule() {
         val target = param.packageName
         if (!param.isFirstPackage) return
         if (target !in HOSTS) {
-            attachApplicationGlass(param)
+            if (!attachApplicationGlass(param)) detachUnused()
             return
         }
-        if (Process.myUid() / 100000 != 0) return
+        if (Process.myUid() / 100000 != 0) return detachUnused()
         val supported = if (target == CAPTURE) GlassTargets.supportsCaptureGlass() else GlassTargets.supportsSystemGlass()
-        if (!supported) return
+        if (!supported) return detachUnused()
         val helper = target == SYSTEM_UI && CrashGuard.isSystemUiAppearanceHelper(process)
         val capture = target == CAPTURE && (process == CAPTURE || process.startsWith("$CAPTURE:"))
         val homeEdge = target == LAUNCHER && process == "$LAUNCHER:cocktailsettings"
-        if (!helper && !capture && !homeEdge && process != target) return
+        if (!helper && !capture && !homeEdge && process != target) return detachUnused()
         val attach = Application::class.java.getDeclaredMethod("attach", Context::class.java)
         ModernHook.aroundMethod(attach) { chain ->
             val result = chain.proceed()
@@ -255,10 +255,11 @@ class HookEntry : XposedModule() {
         main.postAtTime(mark, deadline)
     }
 
-    private fun attachApplicationGlass(param: PackageReadyParam) {
+    /** Returns false when this process gets no hook at all. */
+    private fun attachApplicationGlass(param: PackageReadyParam): Boolean {
         if (process == "system" || process == "system_server" ||
             !ApplicationGlassTargets.includes(param.applicationInfo) || apiVersion < 102 ||
-            frameworkProperties and XposedInterface.PROP_CAP_REMOTE == 0L) return
+            frameworkProperties and XposedInterface.PROP_CAP_REMOTE == 0L) return false
         val attach = Application::class.java.getDeclaredMethod("attach", Context::class.java)
         ModernHook.aroundMethod(attach) { chain ->
             val result = chain.proceed()
@@ -270,6 +271,16 @@ class HookEntry : XposedModule() {
             }
             result
         }
+        return true
+    }
+
+    /**
+     * Nothing in this process can take part in a hot reload. A detached entry lets the framework
+     * decline the next generation before it loads another copy of the module here.
+     */
+    private fun detachUnused() {
+        log("GLASS_MODULE_DETACHED process=$process")
+        detach()
     }
 
     private fun installApplicationGlass(app: Application, activity: Activity?, previous: Array<*>? = null) {

@@ -57,6 +57,15 @@ internal class GlassLighting : GlassLightingV1 {
                 edgeColors = intArrayOf(color(white, 111), color(white, 58),
                     color(shade, if (dark) 30 else 48), color(white, 56))
             }
+            Profile.PIP_CONTROL -> {
+                bodyColors = if (dark) {
+                    intArrayOf(color(white, 33), fillTint(0xabbac9, 13), fillTint(0x26303c, 23))
+                } else {
+                    intArrayOf(color(white, 42), fillTint(0xd3e3ed, 15), fillTint(0x798c9e, 23))
+                }
+                edgeColors = intArrayOf(color(white, 162), color(white, 70),
+                    color(shade, 49), color(0xdaeffb, 117))
+            }
             Profile.SYSTEM_SURFACE, Profile.POWER_ACTION -> {
                 bodyColors = if (dark) {
                     intArrayOf(color(white, 27), fillTint(0x1c2430, 53), fillTint(0x101924, 68))

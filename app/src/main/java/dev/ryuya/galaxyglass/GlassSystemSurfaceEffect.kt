@@ -1,5 +1,6 @@
 package dev.ryuya.galaxyglass
 
+import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Matrix
@@ -14,9 +15,11 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.VectorDrawable
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.widget.ImageButton
 import android.widget.ImageView
 import androidx.annotation.RequiresApi
+import java.lang.ref.WeakReference
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -42,6 +45,10 @@ internal class GlassSystemSurfaceEffect(
     private var placement: Placement? = null
     private var nativeOutline = false
     private var appliedTint = material.tint
+    private var pipPressed = false
+    private var pressAnimator: ValueAnimator? = null
+    private val pressMatrix by lazy { Matrix() }
+    private var ownsPressMatrix = false
 
     private enum class Placement { BACKGROUND, OVERLAY }
 
@@ -83,7 +90,7 @@ internal class GlassSystemSurfaceEffect(
             if (view.background !== layer) setBackgroundPreservingPadding(view, layer)
             placement = Placement.BACKGROUND
         } else {
-            layer.fill = false
+            layer.fill = pipButton
             if (placement != Placement.OVERLAY) view.overlay.add(layer)
             placement = Placement.OVERLAY
             // Leave state-list and ripple opacity to the owner. Preserve foreground contrast
@@ -221,7 +228,69 @@ internal class GlassSystemSurfaceEffect(
         return true
     }
 
+    fun setPipHotspot(x: Float, y: Float) {
+        val bounds = layer.bounds
+        if (bounds.isEmpty) return
+        layer.touchX = ((x - bounds.left) / bounds.width()).coerceIn(0f, 1f)
+        layer.touchY = ((y - bounds.top) / bounds.height()).coerceIn(0f, 1f)
+        if (pipPressed) layer.invalidateSelf()
+    }
+
+    fun setPipPressed(view: View, pressed: Boolean) {
+        if (!pipButton || pipPressed == pressed || placement == null) return
+        pipPressed = pressed
+        pressAnimator?.cancel()
+        pressAnimator = null
+        val target = if (pressed) 1f else 0f
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            updatePipPress(view, target, animate = false)
+            return
+        }
+        // A quick tap still gets a visible release, even if both events arrive in one frame.
+        if (pressed) updatePipPress(view, maxOf(layer.press, .42f), animate = true)
+        val button = WeakReference(view)
+        pressAnimator = ValueAnimator.ofFloat(layer.press, target).apply {
+            duration = if (pressed) 108L else 205L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                button.get()?.let { view -> updatePipPress(view, it.animatedValue as Float, animate = true) }
+            }
+            start()
+        }
+    }
+
+    private fun updatePipPress(view: View, amount: Float, animate: Boolean) {
+        layer.press = amount
+        layer.invalidateSelf()
+        if (!animate || amount <= 0f) {
+            clearPipScale(view)
+            return
+        }
+        // Scale the rendered control as a whole, including its glyph and native backdrop.
+        // The RenderNode animation matrix is separate from the view's input transform.
+        val current = view.animationMatrix
+        if (ownsPressMatrix && current != pressMatrix) ownsPressMatrix = false
+        if ((current != null && !ownsPressMatrix) || view.animation?.hasEnded() == false) return
+        val scale = 1f + amount * .14f
+        pressMatrix.setScale(scale, scale, layer.bounds.exactCenterX(), layer.bounds.exactCenterY())
+        view.animationMatrix = pressMatrix
+        ownsPressMatrix = true
+    }
+
+    private fun clearPipScale(view: View) {
+        if (!ownsPressMatrix) return
+        if (view.animationMatrix == pressMatrix) view.animationMatrix = null
+        ownsPressMatrix = false
+    }
+
     fun restore(view: View) {
+        pressAnimator?.cancel()
+        pressAnimator = null
+        pipPressed = false
+        layer.press = 0f
+        layer.touchX = .5f
+        layer.touchY = .5f
+        clearPipScale(view)
         if (placement == Placement.OVERLAY) view.overlay.remove(layer)
         if (placement == Placement.BACKGROUND && view.background === layer) setBackgroundPreservingPadding(view, null)
         placement = null
@@ -251,12 +320,23 @@ internal class GlassSystemSurfaceEffect(
         var dark = false
         var strength = 0
         var fill = false
+        var press = 0f
+        var touchX = .5f
+        var touchY = .5f
         private var reported = false
+        private val pressLight by lazy { GlassPipPressLight() }
 
         override fun draw(canvas: Canvas) {
             material.drawSurface(canvas, bounds.left.toFloat(), bounds.top.toFloat(), bounds.right.toFloat(),
                 bounds.bottom.toFloat(), radii, strength, dark, fill = fill, rim = true,
-                profile = if (powerActionIcon) GlassMaterial.Profile.POWER_ACTION else GlassMaterial.Profile.SYSTEM_SURFACE)
+                profile = when {
+                    pipButton -> GlassMaterial.Profile.PIP_CONTROL
+                    powerActionIcon -> GlassMaterial.Profile.POWER_ACTION
+                    else -> GlassMaterial.Profile.SYSTEM_SURFACE
+                })
+            if (pipButton && press > 0f && !bounds.isEmpty) {
+                pressLight.draw(canvas, bounds, touchX, touchY, press, dark)
+            }
             if (!reported && !bounds.isEmpty && strength > 0) {
                 reported = true
                 onDrawn()

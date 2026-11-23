@@ -72,7 +72,7 @@ internal data class GlassAppearance(
 internal class GlassMaterial(private val density: Float) {
     enum class Profile {
         STANDARD, QUICK_CONTROL, QUICK_GROUP, QUICK_SLIDER, NOTIFICATION, VOLUME, SYSTEM_SURFACE, POWER_ACTION,
-        APP_CHROME, PRIVACY_PANEL,
+        APP_CHROME, PRIVACY_PANEL, PIP_CONTROL,
     }
 
     var tint: Int = GlassAppearance.DEFAULT_TINT
