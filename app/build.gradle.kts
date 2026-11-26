@@ -23,10 +23,10 @@ android {
     buildFeatures { buildConfig = true }
     defaultConfig {
         applicationId = "dev.ryuya.galaxyglass"
-        minSdk = 33
+        minSdk = 37
         targetSdk = 37
-        versionCode = 62
-        versionName = "0.4.38"
+        versionCode = 63
+        versionName = "0.4.39"
     }
     signingConfigs {
         if (!distributionProperties.isEmpty)

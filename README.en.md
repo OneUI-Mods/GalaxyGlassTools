@@ -1,5 +1,7 @@
 # Galaxy Glass Tools
 
+Installation requires Android 17 (API 37) or later.
+
 [日本語](README.md) · [Developer guide](docs/development.md)
 
 An Android module for glass effects in Galaxy SystemUI, One UI Home, Samsung Capture and system apps with screens. Configure the Quick Panel, notifications and lock screen, volume panel, Home folders and dock, and capture controls independently.
@@ -14,6 +16,6 @@ The system-app adapter styles toolbars, tabs, search bars, navigation, cards, di
 
 Authentication screens, protected windows, and the keyboard during password entry retain their native appearance.
 
-The main rendering contract targets Android 17 BZI9 on the Galaxy S26 Ultra (SM-S948Q). Android 16 AZHL has a separate Samsung Capture path. The local preview is available without enabling the module.
+The main rendering contract targets Android 17 BZI9 on the Galaxy S26 Ultra (SM-S948Q). The local preview is available without enabling the module.
 
 The **Manage** tab can reload One UI Home and Samsung Capture separately with root access. Home opens immediately. Samsung Capture starts on the next screenshot or recording. A current recording or screen share blocks its reload.

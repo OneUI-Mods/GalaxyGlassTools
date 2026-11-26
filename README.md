@@ -1,5 +1,7 @@
 # Galaxy Glass Tools
 
+インストールにはAndroid 17（API 37）以降が必要です。
+
 [English](README.en.md) · [開発者向け](docs/development.md)
 
 GalaxyのSystemUI、One UIホーム、Samsung Capture、画面を持つシステムアプリにガラス効果を適用するVector／libxposed対応モジュールです。クイックパネル、通知とロック画面、音量パネル、ホームのフォルダやドック、撮影の操作画面を個別に切り替えられます。
@@ -14,6 +16,6 @@ GalaxyのSystemUI、One UIホーム、Samsung Capture、画面を持つシステ
 
 認証画面や保護されたウィンドウ、パスワード入力時のキーボードは純正表示を使います。
 
-確認対象はGalaxy S26 Ultra（SM-S948Q）のAndroid 17 BZI9です。Android 16 AZHLではSamsung Capture用の経路を用意しています。アプリ内プレビューはモジュールを有効にする前にも使えます。
+確認対象はGalaxy S26 Ultra（SM-S948Q）のAndroid 17 BZI9です。アプリ内プレビューはモジュールを有効にする前にも使えます。
 
 「管理」タブからOne UIホームとSamsung Captureを個別に再読み込みできます。Root権限を許可すると、ホームはすぐに開き、Samsung Captureは次回の撮影時に起動します。録画や画面共有の実行中はSamsung Captureの再読み込みを止めます。
